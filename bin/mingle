@@ -255,7 +255,10 @@ with open(seqinfo_file, 'w') as seqinfo_fh:
                     'warning',
                     ]
                     for field in direct_copy_fields:
-                        output_description_hash[field] = key_values[field]
+                        try:
+                            output_description_hash[field] = key_values[field]
+                        except KeyError:
+                            pass #if it ain't there, don't include it
                         
                 greengenes_output_hashes.append(output_description_hash)
                     
