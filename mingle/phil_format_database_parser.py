@@ -25,39 +25,54 @@
 #
 # The particular keys are not necessarily as above, just the = BEGIN/END and general layout
 class PhilFormatDatabaseParser:
-  def each(self, file_handle):
-    # state machine - are we inside or outside a BEGIN/END block
-    state = 'outside'
-    current_hash = {}
+    def each(self, file_handle):
+        # state machine - are we inside or outside a BEGIN/END block
+        state = 'outside'
+        current_hash = {}
+        
+        for line_number, line in enumerate(file_handle):
+            line = line.strip()
+            # print "*%s*" % line
+            if len(line) == 0: continue
+        
+            if line == 'BEGIN':
+                if state == 'outside':
+                    state = 'inside'
+                    current_hash = {}
+                else:
+                    raise Exception("Badly formatted file type 1 on line %s, cannot continue, errored out at this line: %s" % (line_number + 1, line))
+                
+            elif line == 'END':
+                if state == 'inside':
+                    yield current_hash
+                    state = 'outside'
+                else:
+                    raise Exception("Badly formatted file type 2 on line %s, cannot continue, errored out at this line: %s" % (line_number + 1, line))
+                
+            elif state == 'inside':
+                splits = line.split('=', 1)
+                if len(splits) == 2:
+                    current_hash[splits[0]] = splits[1]
+                else:
+                    raise Exception("Badly formatted file type 3 on line %s, cannot continue, errored out at this line: %s" % (line_number + 1, line))
+            
+            else:
+                raise Exception("Badly formatted file type 4 on line %s, cannot continue, errored out at this line: %s" % (line_number + 1, line))
+            
+        if state != 'outside':
+            raise Exception("Badly formatted file type 5 on line %s, cannot continue, errored out at the end of the file (ended while expecting an END)" % (line_number + 1))
 
-    for line_number, line in enumerate(file_handle):
-      line = line.strip()
-      #print "*%s*" % line
-      if len(line) == 0: continue
+    def write(self, hashes, io, output_order):
+        is_first = True
+        for dahash in hashes:
+            if is_first:
+                is_first = False
+            else:
+                io.write('\n')
+                
+            io.write('BEGIN\n')
+            for key in output_order:
+                io.write('='.join([key, dahash[key]]))
+                io.write('\n')
+            io.write('END\n')
 
-      if line == 'BEGIN':
-        if state == 'outside':
-          state = 'inside'
-          current_hash = {}
-        else:
-          raise Exception("Badly formatted file type 1 on line %s, cannot continue, errored out at this line: %s" % (line_number+1, line))
-
-      elif line == 'END':
-        if state == 'inside':
-          yield current_hash
-          state = 'outside'
-        else:
-          raise Exception("Badly formatted file type 2 on line %s, cannot continue, errored out at this line: %s" % (line_number+1, line))
-
-      elif state == 'inside':
-        splits = line.split('=',1)
-        if len(splits) == 2:
-          current_hash[splits[0]] = splits[1]
-        else:
-          raise Exception("Badly formatted file type 3 on line %s, cannot continue, errored out at this line: %s" % (line_number+1, line))
-
-      else:
-        raise Exception("Badly formatted file type 4 on line %s, cannot continue, errored out at this line: %s" % (line_number+1, line))
-
-    if state != 'outside':
-      raise Exception("Badly formatted file type 5 on line %s, cannot continue, errored out at the end of the file (ended while expecting an END)" % line_number+1)

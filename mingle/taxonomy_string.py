@@ -31,3 +31,6 @@ class TaxonomyString:
     for i in self.iterate():
       names.append(i)
     return names
+  
+  def num_levels(self):
+      return len(self.tax_string_split)

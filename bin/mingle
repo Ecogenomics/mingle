@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description='''For a given HMM, create a phylog
 parser.add_argument('--hmm', help='Hidden Markov model to search with', required=True)
 parser.add_argument('--greengenes', help='.greengenes file to define taxonomy', required=True)
 parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
-parser.add_argument('--preparation_folder', help='store intermediate files in this folder [default: use temporary folder, delete after use]', default=None, required=True)
+parser.add_argument('--preparation_folder', help='store intermediate files in this folder', default=None, required=True)
 
 parser.add_argument('--evalue', help='evalue cutoff for the hmmsearch (default = %s)' % default_evalue, default=default_evalue)
 parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
@@ -111,11 +111,13 @@ logging.info("Read in %s proteome files for processing e.g. %s" % (len(proteomes
 # Read Phil format file, creating a hash of ACE ID to taxonomy
 logging.info('Reading taxonomy information from .greengenes file..')
 ace_id_to_taxonomy = {}
+ace_id_to_greengenes_hash = {} 
 for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
     ace_id = entry['db_name']
     try:
         taxonomy = entry['genome_tree_tax_string']
         ace_id_to_taxonomy[ace_id] = TaxonomyString(taxonomy).full_name()
+        ace_id_to_greengenes_hash[entry['db_name']] = entry
     except KeyError:
         logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
 
@@ -123,8 +125,8 @@ logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
 
 
 # create taxonomy file
-logging.info('Creating taxonomy file..')
-taxonomy_file_path = os.path.join(dump_directory, 'taxonomy.csv')
+logging.info('Creating taxtastic-format taxonomy file..')
+taxonomy_file_path = os.path.join(dump_directory, 'taxtastic_taxonomy.csv')
 with open(taxonomy_file_path, 'w') as taxonomy_fh:
     taxon_name_to_taxonomy_id = create_taxonomy_file(
         ace_id_to_taxonomy.values(),
@@ -133,6 +135,20 @@ with open(taxonomy_file_path, 'w') as taxonomy_fh:
     )
 logging.info('taxonomy file created.')
 
+logging.info('Creating simple taxonomy format file..')
+simple_taxonomy_file_path = os.path.join(dump_directory, 'taxonomy.csv')
+with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
+    for ace_id, taxes in ace_id_to_taxonomy.items():
+        tax = ace_id_to_greengenes_hash[ace_id]['genome_tree_tax_string']
+        if tax:
+            if TaxonomyString(tax).num_levels() == 7:
+                taxonomy_fh.write(ace_id)
+                taxonomy_fh.write("\t")
+                taxonomy_fh.write(tax) #Need the full path including empty names for tax2tree
+                taxonomy_fh.write("\n")
+            else:
+                logging.warn("Found unexpected number of taxonomy levels in this taxonomy string, not outputing this taxonomy: %s" % tax)
+logging.info('taxonomy file created.')
 
 # Run hmmsearch on each of the proteomes
 logging.info("Running hmmsearches..")
@@ -172,11 +188,12 @@ logging.info("Running cmd: %s" % command)
 subprocess.check_call(["/bin/bash", "-c", command])
 
 # Remove the unaligned parts of the stockholm file
-logging.info("Concatenating and renaming files into a single aligned fasta file..")
+logging.info("Concatenating and renaming files into a single aligned fasta file and creating Phil format output file..")
 # => use biopython's sto parser
 # For each of the hmmaligned files, read in the
 seqinfo_file = os.path.join(dump_directory, 'seq_info.csv')
 sequence_number = 0
+greengenes_output_hashes = []
 with open(seqinfo_file, 'w') as seqinfo_fh:
     seqinfo_fh.write(",".join(["seqname", "tax_id\n"]))  # write header
     aligned_sequences_file = os.path.join(dump_directory, 'aligned.fasta')
@@ -190,16 +207,26 @@ with open(seqinfo_file, 'w') as seqinfo_fh:
 
             try:
                 tax = ace_id_to_taxonomy[db_id]
+                key_values = ace_id_to_greengenes_hash[db_id]
                 taxonomy_id = taxon_name_to_taxonomy_id['root;' + re.sub(' ', '', tax)]  # TODO: what happens if the ACE ID is not found?
             except KeyError:
                 tax = None
+                key_values = None
 
             seqs = aligned_sequences_from_sto_file(sto_path)
             for name, seq in seqs.items():
                 # Concatenate the aligned proteins into one file, renaming them so the ACE ID is at the front
-                # Also add the sequence number, so that the names are garaunteed to be unique
+                # Also add the sequence number, so that the names are guaranteed to be unique
                 # (fasttree fails otherwise)
-                new_name = "%s_%s" % (db_id, sequence_number + 1)
+                new_name = "%sn%s" % (db_id, sequence_number + 1)
+                
+                output_description_hash = {}
+                output_description_hash['db_name'] = new_name
+                output_description_hash['prokMSA_id'] = new_name
+                output_description_hash['name'] = new_name
+                output_description_hash['acc'] = new_name
+                output_description_hash['aligned_seq'] = seq
+                
                 # Record any sequences found in the seqinfo file
                 if tax is not None:
                     seqinfo_fh.write(",".join((
@@ -212,14 +239,62 @@ with open(seqinfo_file, 'w') as seqinfo_fh:
                     aligned_sequences_fh.write("%s\n" % seq)
                     sequence_number += 1
                     
+                    direct_copy_fields = [
+                    'organism',
+                    'genome_tree_description',
+#                    'prokMSA_id',
+                    'owner',
+                    'genome_tree_tax_string',
+                    'greengenes_tax_string',
+                    'blast_hits_16s',
+                    'img_tax_string',
+                    'img_tax_tax2tree_corrected',
+                    'checkm_completeness',
+                    'checkm_contamination',
+                    'core_list_status',
+                    'warning',
+                    ]
+                    for field in direct_copy_fields:
+                        output_description_hash[field] = key_values[field]
+                        
+                greengenes_output_hashes.append(output_description_hash)
+                    
+logging.info("Writing output Phil format file..")
+phil_format_output_file = os.path.join(dump_directory, 'mingle.greengenes')
+output_order = [
+                'prokMSA_id',
+                'db_name',
+                'name',
+                'acc',
+                'organism',
+                'genome_tree_description',
+                'owner',
+                'genome_tree_tax_string',
+                'greengenes_tax_string',
+                'blast_hits_16s',
+                'img_tax_string',
+                'img_tax_tax2tree_corrected',
+                'checkm_completeness',
+                'checkm_contamination',
+                'core_list_status',
+                'warning',
+                'aligned_seq',
+                ]
+with open(phil_format_output_file, 'w') as f:
+    PhilFormatDatabaseParser().write(greengenes_output_hashes, f, output_order)
+                    
 logging.info("Included %s sequences in the alignment" % (sequence_number))
 if sequence_number == 0: raise Exception("No matching sequences detected, cannot create tree")
 if sequence_number < 4: logging.warn("Too few sequences detected (%s)!!!!, the output is unlikely to be informative" % sequence_number)
 
 # Make a tree, saving the log information
 logging.info("Creating phylogenetic tree..")
-fasttree_output = os.path.join(dump_directory, 'tree.nwk')
+fasttree_output = os.path.join(dump_directory, 'fasttree.tree')
 fasttree_log_file = os.path.join(dump_directory, 'fasttree.log')
 subprocess.check_call(["bash", "-c", "FastTreeMP -log %s %s > %s" % (fasttree_log_file, aligned_sequences_file, fasttree_output)])
+
+logging.info("Running tax2tree to decorate taxonomy on the tree (perhaps this is a bad idea, but..)")
+tax2tree_output = os.path.join(dump_directory, 'fasttree.tax2tree.tree')
+subprocess.check_call(["bash", "-c", "t2t decorate -m  %s -t %s -o %s" % (simple_taxonomy_file_path, fasttree_output, tax2tree_output)])
 
 logging.info("Finished")
