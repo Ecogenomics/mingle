@@ -72,7 +72,11 @@ class PhilFormatDatabaseParser:
                 
             io.write('BEGIN\n')
             for key in output_order:
-                io.write('='.join([key, dahash[key]]))
-                io.write('\n')
+                try:
+                    io.write('='.join([key, dahash[key]]))
+                    io.write('\n')
+                except KeyError:
+                    if key=='warning':
+                        io.write("warning=\n") #needed for arb parsing
             io.write('END\n')
 
