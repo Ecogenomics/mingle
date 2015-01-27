@@ -24,6 +24,7 @@ parser.add_argument('--proteomes_list_file', help='path to file containing faa f
 parser.add_argument('--preparation_folder', help='store intermediate files in this folder', default=None, required=True)
 parser.add_argument('--evalue', help='evalue cutoff for the hmmsearch (default = %s)' % default_evalue, default=default_evalue)
 parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
+parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public (default = False)', default=False)
 
 options = parser.parse_args()
 
@@ -106,7 +107,16 @@ ace_id_to_greengenes_hash = {}
 ids_used = []
 for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
     ace_id = entry['db_name']
-    if entry['core_list_status'] == 'public':
+    if options.public:
+        if entry['core_list_status'] == 'public':
+            ids_used.append(entry['db_name'])
+            try:
+                taxonomy = entry['genome_tree_tax_string']
+                ace_id_to_taxonomy[ace_id] = TaxonomyString(taxonomy).full_name()
+                ace_id_to_greengenes_hash[ace_id] = entry
+            except KeyError:
+                logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
+    if not options.public: 
         ids_used.append(entry['db_name'])
         try:
             taxonomy = entry['genome_tree_tax_string']
@@ -114,6 +124,7 @@ for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
             ace_id_to_greengenes_hash[ace_id] = entry
         except KeyError:
             logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
+
 logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
 
 
@@ -230,6 +241,16 @@ with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
         n_seqs = len(seqs.keys())
         s = [seqs[i] for i in seqs.keys()]
         
+        
+        try:
+            tax = ace_id_to_taxonomy[db_id]
+            key_values = ace_id_to_greengenes_hash[db_id]
+        
+        except KeyError:
+            tax = None
+            key_values = None
+
+
         if n_seqs > 1:
             logging.info("%s has multiple sequences. Renaming..." % (db_id))
             names = [db_id+'n'+str(x) for x in range(0, n_seqs)]
@@ -242,6 +263,72 @@ with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
             aligned_sequences_fh.write(">%s\n" % name)
             aligned_sequences_fh.write("%s\n" % seq)
             sequence_number += 1 
+            
+            # Writing a mingle readable file
+            output_description_hash = {}
+            output_description_hash['db_name'] = name
+            output_description_hash['prokMSA_id'] = name
+            output_description_hash['name'] = name
+            output_description_hash['acc'] = name
+            output_description_hash['aligned_seq'] = seq
+
+
+            if tax is not None:
+
+                direct_copy_fields = [
+                                    'organism',
+                                    'genome_tree_description',
+                                    # 'prokMSA_id',
+                                    'owner',
+                                    'genome_tree_tax_string',
+                                    'greengenes_tax_string',
+                                    'blast_hits_16s',
+                                    'img_tax_string',
+                                    'img_tax_tax2tree_corrected',
+                                    'checkm_completeness',
+                                    'checkm_contamination',
+                                    'core_list_status',
+                                    'warning',
+                                        ]
+                
+                for field in direct_copy_fields:
+                    try:
+                        output_description_hash[field] = key_values[field]
+                    except KeyError:
+                        pass #if it ain't there, don't include it
+            
+            greengenes_output_hashes.append(output_description_hash)
+
+
+#Actually write phil readable file
+logging.info("Writing output Phil format file..")
+phil_format_output_file = os.path.join(dump_directory, 'mingle.greengenes')
+
+output_order = [
+                'prokMSA_id',
+                'db_name',
+                'name',
+                'acc',
+                'organism',
+                'genome_tree_description',
+                'owner',
+                'genome_tree_tax_string',
+                'greengenes_tax_string',
+                'blast_hits_16s',
+                'img_tax_string',
+                'img_tax_tax2tree_corrected',
+                'checkm_completeness',
+                'checkm_contamination',
+                'core_list_status',
+                'warning',
+                'aligned_seq',
+                ]
+
+with open(phil_format_output_file, 'w') as f:
+    PhilFormatDatabaseParser().write(greengenes_output_hashes, f, output_order)
+
+
+
 
               
 logging.info("Correcting the sequence names of duplicates in the seq_info file.")     
