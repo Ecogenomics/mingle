@@ -59,7 +59,7 @@ class BlastRunner():
         """
 
         cmd = "blastp -num_threads %d" % cpus
-        cmd += " -query %s -db %s -out %s -evalue %s" % (query_seqs, prot_db, output_file, str(evalue))
+        cmd += " -query %s -db %s -out %s -evalue %g" % (query_seqs, prot_db, output_file, evalue)
         cmd += " -outfmt '6 qseqid qlen sseqid slen length pident evalue bitscore'"
         os.system(cmd)
 

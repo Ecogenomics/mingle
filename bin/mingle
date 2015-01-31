@@ -7,7 +7,7 @@ import os
 import subprocess
 import re
 import IPython
-from mingle.phil_format_database_parser import PhilFormatDatabaseParser
+from mingle.arb_parser import ArbParser
 from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.taxonomy_string import TaxonomyString
 from mingle.blast_workflow import BlastWorkflow
@@ -17,17 +17,17 @@ from graftm.getaxnseq import Tax_n_Seq_builder
 # greengenes file from genome tree database => provides taxonomy
 # HMM => the HMM to search with
 # path to proteome files - one for each genome => sequences to be put into the tree
-default_evalue = '1e-20'
+default_evalue = 1e-20
 default_per_identity = 30.0
 default_aln_len = 50.0
 
-parser = argparse.ArgumentParser(description='''For a given HMM, create a phylogenetic tree and "Phil format" .greengenes file from the an ACE genome tree data (after the database info has been extracted)''')
+parser = argparse.ArgumentParser(description='''Creates a gene tree and an ARB GreenGenes metadata file from genomes in the ACE Genome Tree DB.''')
 parser.add_argument('--hmm', help='Hidden Markov model to search with', required=False, default=None)
 parser.add_argument('--query_proteins', help='FASTA file with proteins for identifying homologs', required=False, default=None)
 parser.add_argument('--greengenes', help='.greengenes file to define taxonomy', required=True)
 parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=False)
 parser.add_argument('--preparation_folder', help='store intermediate files in this folder', default=None, required=True)
-parser.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs (default = %s)' % default_evalue, default=default_evalue)
+parser.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs (default = %s)' % default_evalue, type=float, default=default_evalue)
 parser.add_argument('-p', '--per_identity', help="percent identity for identifying homologs (blast only)", type=float, default=default_per_identity)
 parser.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs (blast only)", type=float, default=default_aln_len)
 parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
@@ -96,8 +96,6 @@ def check_taxonomy(tax):
             print "Bad taxonomy that hasn't been encountered before"
             exit(0)
 
-
-
 # Create temporary directory for everything to go in
 dump_directory = options.preparation_folder
 if os.path.exists(dump_directory):
@@ -105,11 +103,11 @@ if os.path.exists(dump_directory):
 os.mkdir(dump_directory)
 
 # Read Phil format file, creating a hash of ACE ID to taxonomy
-logging.info('Reading taxonomy information from .greengenes file.')
+logging.info('Reading taxonomy information from ARB GreenGenes file.')
 ace_id_to_taxonomy = {}
 ace_id_to_greengenes_hash = {}
 ids_used = []
-for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
+for entry in ArbParser().each(open(options.greengenes)):
     ace_id = entry['db_name']
     if options.public:
         if entry['core_list_status'] == 'public':
@@ -133,18 +131,21 @@ logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
 
 
 
+
 # switch between HMM-mode and BLAST-mode
 # (this is a little hacky right now, we should separate both these workflows into individual files/classes and separate menu options)
 if options.query_proteins:
     blast_workflow = BlastWorkflow(options.preparation_folder)
     blast_workflow.run(options.query_proteins,
-                       float(options.evalue),
+                       options.evalue,
                        options.per_identity,
                        options.per_aln_len,
                        ace_id_to_greengenes_hash,
                        options.cpus)
 
     sys.exit(0)  # break free from HMM workflow [SUPER HACKY]
+
+
 
 
 logging.info('Creating simple taxonomy format file..')
@@ -206,7 +207,7 @@ hmmsearches_directory = os.path.join(dump_directory, 'hmmsearches')
 os.makedirs(hmmsearches_directory)
 # TODO: the below fails if the given proteome list file is a pipe as opposed to a regular file. This script should read the list file,
 # and then directly pass the list to parallel, and then all will be well.
-command = "cat %s |parallel --gnu -j %s hmmsearch -E %s --domtblout %s/{/}.domtblout.csv %s {} '>' /dev/null" % (
+command = "cat %s |parallel --gnu -j %s hmmsearch -E %g --domtblout %s/{/}.domtblout.csv %s {} '>' /dev/null" % (
   u_proteome_files,
   options.cpus,
   options.evalue,
@@ -323,7 +324,7 @@ with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
 logging.info("Writing output Phil format file..")
 phil_format_output_file = os.path.join(dump_directory, 'mingle.greengenes')
 with open(phil_format_output_file, 'w') as f:
-    PhilFormatDatabaseParser().write(greengenes_output_hashes, f)
+    ArbParser().write(greengenes_output_hashes, f)
 
 
 

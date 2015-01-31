@@ -31,7 +31,7 @@ from collections import defaultdict
 from mingle.blast import BlastRunner, BlastParser
 from mingle.muscle import MuscleRunner
 from mingle.fasttree import FastTreeRunner
-from mingle.phil_format_database_parser import PhilFormatDatabaseParser
+from mingle.arb_parser import ArbParser
 from mingle.seq_io import SeqIO
 
 
@@ -111,6 +111,9 @@ class BlastWorkflow():
             new_hash['prokMSA_id'] = new_genome_id
             new_hash['name'] = new_genome_id
             new_hash['acc'] = seq_id
+            new_hash['ACE_genome_id'] = genome_id
+            new_hash['gene_id'] = seq_id[seq_id.find('_') + 1:]
+            new_hash['gene_annotation'] = ''
 
             metadata_for_homologs.append(new_hash)
 
@@ -151,7 +154,7 @@ class BlastWorkflow():
         seq_io = SeqIO()
 
         # identify homologous genes using blast
-        self.logger.info('Identifying homologous genes using blastp.')
+        self.logger.info('Identifying homologous genes using BLAST.')
         br = BlastRunner()
         br.blastp(query_seqs, self.protein_blast_db, evalue, cpus, self.blast_output)
 
@@ -165,7 +168,6 @@ class BlastWorkflow():
 
         # create GreenGenes style file for ARB
         self.logger.info('Creating GreenGenes-style file for ARB.')
-        db = PhilFormatDatabaseParser()
         metadata_for_homologs, new_seqs = self.modify_greengene_hashes(greengenes_metadata, seqs)
         seq_io.write_fasta(new_seqs, self.homolog_output)
 
@@ -181,7 +183,8 @@ class BlastWorkflow():
             metadata['aligned_seq'] = aligned_seqs[gene_id]
 
         f = open(self.arb_greengenes_db, 'w')
-        db.write(metadata_for_homologs, f)
+        arb_parser = ArbParser()
+        arb_parser.write(metadata_for_homologs, f)
         f.close()
 
         # infer tree
