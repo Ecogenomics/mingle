@@ -61,27 +61,27 @@ class BlastWorkflow():
         self.tree_log = os.path.join(output_dir, "gene_tree.log")
         self.tree_output_log = os.path.join(output_dir, "gene_tree.out")
 
-    def modify_greengene_hashes(self, greengenes_metadata, seqs):
+    def modify_greengene_hashes(self, metadata, seqs):
         """Extract and modify GreenGene hashes for homologous genes.
 
         Provides sensible names for homologous genes which make the
         source genome clear and handles instances where a genome
-        contains multiple homologous genes. A list of GreenGenes style
-        dictionaries describing the genomes with hits is produced along
-        with a corresponding dictionary of the renamed homologous
-        sequences.
+        contains multiple homologous genes. A list of dictionaries
+        describing genome metadata for each homologous genes is
+        produced along with a corresponding dictionary of the renamed
+        homologous sequences.
 
         Parameters
         ----------
-        greengenes_metadata : dict[genome_id] -> metadata dictionary
-            GreenGenes style metadata for genomes.
+        metadata : dict[genome_id] -> metadata dictionary
+            Metadata for genomes.
         seqs: dict[seq_id] -> seq
             Homologous sequences indexed by sequence id.
 
         Returns
         -------
         list of dict
-           Metadata in GreenGenes format for each homologous gene.
+           Metadata for each homologous gene.
         dict
             Homologous sequences indexed with new sequence ids.
         """
@@ -102,7 +102,7 @@ class BlastWorkflow():
                 new_genome_id += '_' + str(count + 1)
 
             try:
-                new_hash = greengenes_metadata[genome_id].copy()
+                new_hash = metadata[genome_id].copy()
             except:
                 self.logger.warning('Missing metadata information for genome: %s' % genome_id)
                 new_hash = {}
@@ -124,7 +124,7 @@ class BlastWorkflow():
 
         return metadata_for_homologs, new_seqs
 
-    def run(self, query_seqs, evalue, per_identity, per_aln_len, greengenes_metadata, cpus):
+    def run(self, query_seqs, evalue, per_identity, per_aln_len, metadata, cpus):
         """Infer a gene tree for homologous genes identified by blast.
 
         Complete workflow for inferring a gene tree from homologous sequences
@@ -141,8 +141,8 @@ class BlastWorkflow():
             Percent identity threshold used to define a homologous gene.
         per_aln_len : float
             Alignment length threshold used to define a homologous gene.
-        greengenes_metadata : dict[genome_id] -> metadata dictionary
-            GreenGenes style metadata for genomes.
+        metadata : dict[genome_id] -> metadata dictionary
+            Metadata for genomes.
         cpus : int
             Number of cpus to use during homology search.
         """
@@ -168,7 +168,7 @@ class BlastWorkflow():
 
         # create GreenGenes style file for ARB
         self.logger.info('Creating GreenGenes-style file for ARB.')
-        metadata_for_homologs, new_seqs = self.modify_greengene_hashes(greengenes_metadata, seqs)
+        metadata_for_homologs, new_seqs = self.modify_greengene_hashes(metadata, seqs)
         seq_io.write_fasta(new_seqs, self.homolog_output)
 
         # infer multiple sequence alignment
