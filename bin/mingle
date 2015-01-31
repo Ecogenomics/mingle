@@ -10,6 +10,7 @@ import IPython
 from mingle.phil_format_database_parser import PhilFormatDatabaseParser
 from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.taxonomy_string import TaxonomyString
+from mingle.blast_workflow import BlastWorkflow
 from graftm.getaxnseq import Tax_n_Seq_builder
 
 # Inputs:
@@ -17,12 +18,18 @@ from graftm.getaxnseq import Tax_n_Seq_builder
 # HMM => the HMM to search with
 # path to proteome files - one for each genome => sequences to be put into the tree
 default_evalue = '1e-20'
+default_per_identity = 30.0
+default_aln_len = 50.0
+
 parser = argparse.ArgumentParser(description='''For a given HMM, create a phylogenetic tree and "Phil format" .greengenes file from the an ACE genome tree data (after the database info has been extracted)''')
-parser.add_argument('--hmm', help='Hidden Markov model to search with', required=True)
+parser.add_argument('--hmm', help='Hidden Markov model to search with', required=False, default=None)
+parser.add_argument('--query_proteins', help='FASTA file with proteins for identifying homologs', required=False, default=None)
 parser.add_argument('--greengenes', help='.greengenes file to define taxonomy', required=True)
-parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
+parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=False)
 parser.add_argument('--preparation_folder', help='store intermediate files in this folder', default=None, required=True)
-parser.add_argument('--evalue', help='evalue cutoff for the hmmsearch (default = %s)' % default_evalue, default=default_evalue)
+parser.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs (default = %s)' % default_evalue, default=default_evalue)
+parser.add_argument('-p', '--per_identity', help="percent identity for identifying homologs (blast only)", type=float, default=default_per_identity)
+parser.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs (blast only)", type=float, default=default_aln_len)
 parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
 parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public (default = False)', default=False)
 
@@ -51,45 +58,43 @@ def check_taxonomy(tax):
             if 'k__Nanoarchaeota' in tax_set:
                 del tax_set[-1]
                 for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
+                        tax_set[idx] = item.replace(tax_suffix[idx], tax_suffix[idx + 1])
                 return '; '.join(tax_set)
-                
+
             elif 'k__Crenarchaeota' in tax_set:
-                
+
                 if tax_set[2] == 'p__':
-                    del tax_set[-1]    
+                    del tax_set[-1]
                     for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
+                        tax_set[idx] = item.replace(tax_suffix[idx], tax_suffix[idx + 1])
                     return '; '.join(tax_set)
                 elif tax_set[2] == 'p__Thaumarchaeota':
                     del tax_set[4]
                     for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                    return '; '.join(tax_set)    
-                    
+                        tax_set[idx] = item.replace(item[:3], tax_suffix[idx + 1])
+                    return '; '.join(tax_set)
+
                 elif tax_set[2] == 'p__Crenarchaeota':
                     del tax_set[3]
                     for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                    return '; '.join(tax_set)    
-                    
+                        tax_set[idx] = item.replace(item[:3], tax_suffix[idx + 1])
+                    return '; '.join(tax_set)
+
             elif 'k__Euryarchaeota' in tax_set:
                 del tax_set[1]
                 for idx, item in enumerate(tax_set):
-                    tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
+                    tax_set[idx] = item.replace(item[:3], tax_suffix[idx + 1])
                 return '; '.join(tax_set)
-                
-            
+
+
             else:
                 print "Bad taxonomy that hasn't been encountered before"
                 exit(0)
-                    
-        
+
+
         else:
             print "Bad taxonomy that hasn't been encountered before"
-            exit(0)  
-
-
+            exit(0)
 
 
 
@@ -99,11 +104,10 @@ if os.path.exists(dump_directory):
     raise Exception("Prep folder %s already exists, cowardly refusing to proceed" % dump_directory)
 os.mkdir(dump_directory)
 
-
 # Read Phil format file, creating a hash of ACE ID to taxonomy
-logging.info('Reading taxonomy information from .greengenes file..')
+logging.info('Reading taxonomy information from .greengenes file.')
 ace_id_to_taxonomy = {}
-ace_id_to_greengenes_hash = {} 
+ace_id_to_greengenes_hash = {}
 ids_used = []
 for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
     ace_id = entry['db_name']
@@ -116,7 +120,7 @@ for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
                 ace_id_to_greengenes_hash[ace_id] = entry
             except KeyError:
                 logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
-    if not options.public: 
+    if not options.public:
         ids_used.append(entry['db_name'])
         try:
             taxonomy = entry['genome_tree_tax_string']
@@ -128,31 +132,46 @@ for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
 logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
 
 
+
+# switch between HMM-mode and BLAST-mode
+# (this is a little hacky right now, we should separate both these workflows into individual files/classes and separate menu options)
+if options.query_proteins:
+    blast_workflow = BlastWorkflow(options.preparation_folder)
+    blast_workflow.run(options.query_proteins,
+                       float(options.evalue),
+                       options.per_identity,
+                       options.per_aln_len,
+                       ace_id_to_greengenes_hash,
+                       options.cpus)
+
+    sys.exit(0)  # break free from HMM workflow [SUPER HACKY]
+
+
 logging.info('Creating simple taxonomy format file..')
 simple_taxonomy_file_path = os.path.join(dump_directory, 'taxonomy.csv')
 with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
 
     for ace_id, taxes in ace_id_to_taxonomy.items():
         tax = ace_id_to_greengenes_hash[ace_id]['genome_tree_tax_string']
-        
+
         if tax:
             if tax.endswith(';'):
                 tax = tax[:-1]
-                
+
             if TaxonomyString(tax).num_levels() == 7:
                 taxonomy_fh.write(ace_id)
                 taxonomy_fh.write("\t")
-                taxonomy_fh.write(tax) #Need the full path including empty names for tax2tree
+                taxonomy_fh.write(tax)  # Need the full path including empty names for tax2tree
                 taxonomy_fh.write("\n")
             else:
                 logging.warn("Found unexpected number of taxonomy levels in this taxonomy string, not outputing this taxonomy: %s. Attempting to correct..." % tax)
                 tax2 = check_taxonomy(tax)
                 taxonomy_fh.write(ace_id)
                 taxonomy_fh.write("\t")
-                taxonomy_fh.write(tax2) # Need the full path including empty names for tax2tree
+                taxonomy_fh.write(tax2)  # Need the full path including empty names for tax2tree
 
                 taxonomy_fh.write("\n")
-                
+
 logging.info('taxonomy file created.')
 
 logging.info('Create taxit taxonomy and seqinfo file.')
@@ -171,7 +190,7 @@ for f in open(options.proteomes_list_file, 'r'):
 with open(u_proteome_files, 'w') as prot_files:
     for i in ids_files:
         prot_files.write(i)
-    
+
 # Read each of the proteome paths and strip() them
 with open(u_proteome_files) as f:
     proteomes = [pro.strip() for pro in f]
@@ -240,12 +259,12 @@ with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
         seqs = aligned_sequences_from_sto_file(sto_path)
         n_seqs = len(seqs.keys())
         s = [seqs[i] for i in seqs.keys()]
-        
-        
+
+
         try:
             tax = ace_id_to_taxonomy[db_id]
             key_values = ace_id_to_greengenes_hash[db_id]
-        
+
         except KeyError:
             tax = None
             key_values = None
@@ -253,17 +272,17 @@ with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
 
         if n_seqs > 1:
             logging.info("%s has multiple sequences. Renaming..." % (db_id))
-            names = [db_id+'n'+str(x) for x in range(0, n_seqs)]
+            names = [db_id + 'n' + str(x) for x in range(0, n_seqs)]
             duplicates[db_id] = names
         else:
             names = [db_id]
-        
-        
+
+
         for name, seq in zip(names, s):
             aligned_sequences_fh.write(">%s\n" % name)
             aligned_sequences_fh.write("%s\n" % seq)
-            sequence_number += 1 
-            
+            sequence_number += 1
+
             # Writing a mingle readable file
             output_description_hash = {}
             output_description_hash['db_name'] = name
@@ -290,52 +309,31 @@ with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
                                     'core_list_status',
                                     'warning',
                                         ]
-                
+
                 for field in direct_copy_fields:
                     try:
                         output_description_hash[field] = key_values[field]
                     except KeyError:
-                        pass #if it ain't there, don't include it
-            
+                        pass  # if it ain't there, don't include it
+
             greengenes_output_hashes.append(output_description_hash)
 
 
-#Actually write phil readable file
+# Actually write phil readable file
 logging.info("Writing output Phil format file..")
 phil_format_output_file = os.path.join(dump_directory, 'mingle.greengenes')
-
-output_order = [
-                'prokMSA_id',
-                'db_name',
-                'name',
-                'acc',
-                'organism',
-                'genome_tree_description',
-                'owner',
-                'genome_tree_tax_string',
-                'greengenes_tax_string',
-                'blast_hits_16s',
-                'img_tax_string',
-                'img_tax_tax2tree_corrected',
-                'checkm_completeness',
-                'checkm_contamination',
-                'core_list_status',
-                'warning',
-                'aligned_seq',
-                ]
-
 with open(phil_format_output_file, 'w') as f:
-    PhilFormatDatabaseParser().write(greengenes_output_hashes, f, output_order)
+    PhilFormatDatabaseParser().write(greengenes_output_hashes, f)
 
 
 
 
-              
-logging.info("Correcting the sequence names of duplicates in the seq_info file.")     
+
+logging.info("Correcting the sequence names of duplicates in the seq_info file.")
 new_seq = []
 with open(taxtastic_seq, 'r') as f:
     ids = [i.strip().split(',') for i in f]
-    
+
     for i in ids:
         try:
             for new in duplicates[i[0]]:
@@ -346,7 +344,7 @@ with open(taxtastic_seq, 'r') as f:
 with open(taxtastic_seq, 'w') as f:
     for entry in new_seq:
         f.write("%s\n" % entry)
-         
+
 logging.info("Included %s sequences in the alignment" % (sequence_number))
 if sequence_number == 0: raise Exception("No matching sequences detected, cannot create tree")
 if sequence_number < 4: logging.warn("Too few sequences detected (%s)!!!!, the output is unlikely to be informative" % sequence_number)
