@@ -23,6 +23,8 @@ __maintainer__ = "Ben Woodcroft"
 __email__ = ""
 __status__ = "Development"
 
+import logging
+
 
 class ArbParser:
     """Provides methods for reading and writing files for use with ARB.
@@ -50,13 +52,46 @@ class ArbParser:
     BEGIN
     ...
 
-    The particular keys are not necessarily as above, just the = BEGIN/END and general layout
+    The particular keys are not necessarily as above, just the = BEGIN/END and general layout.
 
+    Information about ARB import filters can be found at:
+      http://help.arb-home.de/importift.html
     """
 
     def __init__(self):
         """Initialization."""
-        pass
+        self.logger = logging.getLogger()
+
+    def read(self, greengenes_file, public):
+        """Read records from a GreenGenes file.
+
+        Parameters
+        ----------
+        greengenes_file : str
+            Name of GreenGenes file to read.
+        public : boolean
+            Flag indicating if only public records should be read.
+
+        Returns
+        -------
+        dict : dict[genome_id] -> metadata dictionary
+            Meatadata for genomes.
+        """
+
+        logging.info('Reading taxonomy information from ARB GreenGenes file.')
+        genome_metadata = {}
+        for entry in self.each(open(greengenes_file)):
+            db_name = entry['db_name']
+
+            try:
+                if not public:  # read every record
+                    genome_metadata[db_name] = entry
+                elif entry['core_list_status'] == 'public':  # only retrieve public records
+                    genome_metadata[db_name] = entry
+            except KeyError:
+                logging.warn("Metadata record not found for ID: %s, skipping" % db_name)
+
+        return genome_metadata
 
     def each(self, file_handle):
         """Generator function for reading GreenGenes formatted files.
