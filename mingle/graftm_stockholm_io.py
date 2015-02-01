@@ -1,3 +1,28 @@
+###############################################################################
+#                                                                             #
+#    This program is free software: you can redistribute it and/or modify     #
+#    it under the terms of the GNU General Public License as published by     #
+#    the Free Software Foundation, either version 3 of the License, or        #
+#    (at your option) any later version.                                      #
+#                                                                             #
+#    This program is distributed in the hope that it will be useful,          #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of           #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the            #
+#    GNU General Public License for more details.                             #
+#                                                                             #
+#    You should have received a copy of the GNU General Public License        #
+#    along with this program. If not, see <http://www.gnu.org/licenses/>.     #
+#                                                                             #
+###############################################################################
+
+__author__ = "Ben Woodcroft"
+__copyright__ = "Copyright 2015"
+__credits__ = ["Ben Woodcroft"]
+__license__ = "GPL3"
+__maintainer__ = "Ben Woodcroft"
+__email__ = ""
+__status__ = "Development"
+
 import Bio
 import re
 
@@ -37,19 +62,19 @@ class GraftMStockholmIterator:
                 self._header = line
                 break
             elif line == "//":
-                #The "//" line indicates the end of the alignment.
-                #There may still be more meta-data
+                # The "//" line indicates the end of the alignment.
+                # There may still be more meta-data
                 passed_end_alignment = True
             elif line == "":
-                #blank line, ignore
+                # blank line, ignore
                 pass
             elif line[0] != "#":
-                #Sequence
-                #Format: "<seqname> <sequence>"
+                # Sequence
+                # Format: "<seqname> <sequence>"
                 assert not passed_end_alignment
                 parts = [x.strip() for x in line.split(" ", 1)]
                 if len(parts) != 2:
-                    #This might be someone attempting to store a zero length sequence?
+                    # This might be someone attempting to store a zero length sequence?
                     raise ValueError("Could not split line into identifier "
                                       + "and sequence:\n" + line)
                 id, seq = parts
@@ -58,26 +83,26 @@ class GraftMStockholmIterator:
                 seqs.setdefault(id, '')
                 seqs[id] += seq
             elif len(line) >= 5:
-                #Comment line or meta-data
+                # Comment line or meta-data
                 if line[:5] == "#=GF ":
-                    #Generic per-File annotation, free text
-                    #Format: #=GF <feature> <free text>
+                    # Generic per-File annotation, free text
+                    # Format: #=GF <feature> <free text>
                     feature, text = line[5:].strip().split(None, 1)
-                    #Each feature key could be used more than once,
-                    #so store the entries as a list of strings.
+                    # Each feature key could be used more than once,
+                    # so store the entries as a list of strings.
                     if feature not in gf:
                         gf[feature] = [text]
                     else:
                         gf[feature].append(text)
                 elif line[:5] == '#=GC ':
-                    #Generic per-Column annotation, exactly 1 char per column
-                    #Format: "#=GC <feature> <exactly 1 char per column>"
+                    # Generic per-Column annotation, exactly 1 char per column
+                    # Format: "#=GC <feature> <exactly 1 char per column>"
                     pass
                 elif line[:5] == '#=GS ':
-                    #Generic per-Sequence annotation, free text
-                    #Format: "#=GS <seqname> <feature> <free text>"
+                    # Generic per-Sequence annotation, free text
+                    # Format: "#=GS <seqname> <feature> <free text>"
                     id, feature, text = line[5:].strip().split(None, 2)
-                    #if id not in ids:
+                    # if id not in ids:
                     #    ids.append(id)
                     if id not in gs:
                         gs[id] = {}
@@ -86,31 +111,31 @@ class GraftMStockholmIterator:
                     else:
                         gs[id][feature].append(text)
                 elif line[:5] == "#=GR ":
-                    #Generic per-Sequence AND per-Column markup
-                    #Format: "#=GR <seqname> <feature> <exactly 1 char per column>"
+                    # Generic per-Sequence AND per-Column markup
+                    # Format: "#=GR <seqname> <feature> <exactly 1 char per column>"
                     id, feature, text = line[5:].strip().split(None, 2)
-                    #if id not in ids:
+                    # if id not in ids:
                     #    ids.append(id)
                     if id not in gr:
                         gr[id] = {}
                     if feature not in gr[id]:
                         gr[id][feature] = ""
                     gr[id][feature] += text.strip()  # append to any previous entry
-                    #TODO - Should we check the length matches the alignment length?
+                    # TODO - Should we check the length matches the alignment length?
                     #       For iterlaced sequences the GR data can be split over
                     #       multiple lines
-            #Next line...
+            # Next line...
 
         assert len(seqs) <= len(ids)
-        #assert len(gs)   <= len(ids)
-        #assert len(gr)   <= len(ids)
+        # assert len(gs)   <= len(ids)
+        # assert len(gr)   <= len(ids)
 
         self.ids = ids
         self.sequences = seqs
         self.seq_annotation = gs
         self.seq_col_annotation = gr
         self.gc = gc
-        for k,v in seqs.items():
-            seqs[k] = re.sub(r'[a-z\.\*]','',v,0)
+        for k, v in seqs.items():
+            seqs[k] = re.sub(r'[a-z\.\*]', '', v, 0)
 
         return seqs
