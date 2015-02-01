@@ -35,12 +35,15 @@ from mingle.arb_parser import ArbParser
 from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.taxonomy_string import TaxonomyString
 from mingle.blast_workflow import BlastWorkflow
+from mingle.reduce_workflow import Reduce
 from mingle.bootstrap import Bootstrap
 from graftm.getaxnseq import Tax_n_Seq_builder
 
 
 # set logging level
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG,
+                        format="[%(asctime)s] %(levelname)s: %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%S")
 
 
 class CustomHelpFormatter(argparse.HelpFormatter):
@@ -83,6 +86,7 @@ def printHelp():
     blast      -> Infer gene tree using BLAST
 
   Tree utilities:
+    reduce     -> Infer tree for reduced set of genes
     bootstrap  -> Calculate bootstrap support for tree
     '''
 
@@ -439,10 +443,20 @@ if __name__ == '__main__':
     blast_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
     # blast_parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public', default=False)
 
+    # infer tree over a reduced set of genes
+    reduce_parser = subparsers.add_parser('reduce',
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Infer tree for reduced set of genes.')
+
+    reduce_parser.add_argument('-m', '--msa_file', help='multiple sequence alignment used to infer tree (fasta format)', required=True)
+    reduce_parser.add_argument('-g', '--gene_ids', help='gene ids to retain in tree (one id per line)', required=True)
+    reduce_parser.add_argument('-o', '--output_tree', help='output tree with bootstrap values', required=True)
+    reduce_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
+
     # calculate bootstrap support
     bootstrap_parser = subparsers.add_parser('bootstrap',
                                         formatter_class=CustomHelpFormatter,
-                                        description='Infer gene tree using BLAST.')
+                                        description='Calculate bootstrap support for tree.')
 
     bootstrap_parser.add_argument('-t', '--tree', help='tree requiring bootstrap support values', required=True)
     bootstrap_parser.add_argument('-m', '--msa_file', help='multiple sequence alignment used to infer tree (fasta format)', required=True)
@@ -458,7 +472,11 @@ if __name__ == '__main__':
     else:
         options = parser.parse_args()
 
-    if options.subparser_name == 'bootstrap':
+    if options.subparser_name == 'reduce':
+        reduce = Reduce()
+        reduce.run(options.msa_file, options.gene_ids, options.output_tree, options.cpus)
+        sys.exit(0)
+    elif options.subparser_name == 'bootstrap':
         bootstrap = Bootstrap()
         bootstrap.run(options.tree, options.msa_file, options.output_tree, options.num_replicates, options.cpus)
         sys.exit(0)
