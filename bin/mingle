@@ -1,6 +1,29 @@
 #!/usr/bin/env python
 
-__version__ = "0.0.1"
+###############################################################################
+#                                                                             #
+#    This program is free software: you can redistribute it and/or modify     #
+#    it under the terms of the GNU General Public License as published by     #
+#    the Free Software Foundation, either version 3 of the License, or        #
+#    (at your option) any later version.                                      #
+#                                                                             #
+#    This program is distributed in the hope that it will be useful,          #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of           #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the            #
+#    GNU General Public License for more details.                             #
+#                                                                             #
+#    You should have received a copy of the GNU General Public License        #
+#    along with this program. If not, see <http://www.gnu.org/licenses/>.     #
+#                                                                             #
+###############################################################################
+
+__author__ = "Joel Boyd, Ben Woodcroft, Donovan Parks"
+__copyright__ = "Copyright 2015"
+__credits__ = ["Joel Boyd", "Ben Woodcroft", "Donovan Parks"]
+__license__ = "GPL3"
+__maintainer__ = "Joel Boyd, Ben Woodcroft, Donovan Parks"
+__email__ = "donovan.parks@gmail.com"
+__status__ = "Development"
 
 import argparse
 import logging
@@ -44,9 +67,15 @@ class CustomHelpFormatter(argparse.HelpFormatter):
         return ''.join([indent + line for line in text.splitlines(True)])
 
 
+def version():
+    binDir = os.path.dirname(os.path.realpath(__file__))
+    versionFile = open(os.path.join(binDir, '..', 'mingle', 'VERSION'))
+    return versionFile.read().strip()
+
+
 def printHelp():
     print ''
-    print '                ...::: Mingle v' + __version__ + ' :::...'''
+    print '                ...::: Mingle v' + version() + ' :::...'''
     print '''\
 
   Gene tree inference:
