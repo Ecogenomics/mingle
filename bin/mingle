@@ -12,6 +12,7 @@ from mingle.arb_parser import ArbParser
 from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.taxonomy_string import TaxonomyString
 from mingle.blast_workflow import BlastWorkflow
+from mingle.bootstrap import Bootstrap
 from graftm.getaxnseq import Tax_n_Seq_builder
 
 
@@ -48,8 +49,12 @@ def printHelp():
     print '                ...::: Mingle v' + __version__ + ' :::...'''
     print '''\
 
+  Gene tree inference:
     hmm        -> Infer gene tree using a HMM
     blast      -> Infer gene tree using BLAST
+
+  Tree utilities:
+    bootstrap  -> Calculate bootstrap support for tree
     '''
 
 
@@ -145,7 +150,7 @@ def hmm_workflow(options):
     simple_taxonomy_file_path = os.path.join(options.output_dir, 'taxonomy.csv')
     with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
 
-        for ace_id, taxes in ace_id_to_taxonomy.items():
+        for ace_id, _taxes in ace_id_to_taxonomy.items():
             tax = ace_id_to_greengenes_hash[ace_id]['genome_tree_tax_string']
 
             if tax:
@@ -384,7 +389,7 @@ if __name__ == '__main__':
                                         formatter_class=CustomHelpFormatter,
                                         description='Infer gene tree using a HMM.')
 
-    hmm_parser.add_argument('--hmm', help='Hidden Markov model to search with', required=True, default=None)
+    hmm_parser.add_argument('--hmm', help='Hidden Markov model to search with', required=True)
     hmm_parser.add_argument('--greengenes', help='GreenGenes file with metadata for genomes', required=True)
     hmm_parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
     hmm_parser.add_argument('--output_dir', help='store files in this folder', required=True)
@@ -397,13 +402,24 @@ if __name__ == '__main__':
                                         formatter_class=CustomHelpFormatter,
                                         description='Infer gene tree using BLAST.')
 
-    blast_parser.add_argument('-q', '--query_proteins', help='protein sequences for identifying homologs (fasta format)', required=True, default=None)
+    blast_parser.add_argument('-q', '--query_proteins', help='protein sequences for identifying homologs (fasta format)', required=True)
     blast_parser.add_argument('-o', '--output_dir', help='store files in this folder', required=True)
     blast_parser.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs', type=float, default=1e-5)
     blast_parser.add_argument('-p', '--per_identity', help="percent identity for identifying homologs (blast only)", type=float, default=30.0)
     blast_parser.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs (blast only)", type=float, default=50.0)
     blast_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
     # blast_parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public', default=False)
+
+    # calculate bootstrap support
+    bootstrap_parser = subparsers.add_parser('bootstrap',
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Infer gene tree using BLAST.')
+
+    bootstrap_parser.add_argument('-t', '--tree', help='tree requiring bootstrap support values', required=True)
+    bootstrap_parser.add_argument('-m', '--msa_file', help='multiple sequence alignment used to infer tree (fasta format)', required=True)
+    bootstrap_parser.add_argument('-o', '--output_tree', help='output tree with bootstrap values', required=True)
+    bootstrap_parser.add_argument('-r', '--num_replicates', help='number of bootstrap replicates to perform', type=int, default=100)
+    bootstrap_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
 
     # get and check options
     options = None
@@ -413,12 +429,17 @@ if __name__ == '__main__':
     else:
         options = parser.parse_args()
 
+    if options.subparser_name == 'bootstrap':
+        bootstrap = Bootstrap()
+        bootstrap.run(options.tree, options.msa_file, options.output_tree, options.num_replicates, options.cpus)
+        sys.exit(0)
+
     # create output directory
     if os.path.exists(options.output_dir):
         raise Exception("Output folder %s already exists, cowardly refusing to proceed" % options.output_dir)
     os.mkdir(options.output_dir)
 
-    if(options.subparser_name == "hmm"):
+    if options.subparser_name == "hmm":
         hmm_workflow(options)
-    elif(options.subparser_name == 'blast'):
+    elif options.subparser_name == 'blast':
         blast_workflow(options)
