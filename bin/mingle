@@ -390,7 +390,7 @@ def hmm_workflow(options):
 def blast_workflow(options):
     """Infer gene tree using blast workflow."""
 
-    options.greengenes = '/srv/db/mingle/0.1/mingle0.1.greengenes'
+    options.greengenes = '/srv/whitlam/bio/db/gtdb/gtdb.greengenes'
 
     logging.info('Reading metadata information from ARB GreenGenes file.')
     arb_parser = ArbParser()
@@ -438,8 +438,8 @@ if __name__ == '__main__':
     blast_parser.add_argument('-q', '--query_proteins', help='protein sequences for identifying homologs (fasta format)', required=True)
     blast_parser.add_argument('-o', '--output_dir', help='store files in this folder', required=True)
     blast_parser.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs', type=float, default=1e-5)
-    blast_parser.add_argument('-p', '--per_identity', help="percent identity for identifying homologs (blast only)", type=float, default=30.0)
-    blast_parser.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs (blast only)", type=float, default=50.0)
+    blast_parser.add_argument('-p', '--per_identity', help="percent identity for identifying homologs", type=float, default=30.0)
+    blast_parser.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs", type=float, default=50.0)
     blast_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
     # blast_parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public', default=False)
 

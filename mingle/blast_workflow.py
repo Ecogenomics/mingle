@@ -86,7 +86,6 @@ class BlastWorkflow():
             Homologous sequences indexed with new sequence ids.
         """
 
-        """"""
         metadata_for_homologs = []
         genes_in_genome = defaultdict(int)
         new_seqs = {}
@@ -137,7 +136,7 @@ class BlastWorkflow():
             Fasta file containing query sequences.
         evalue : float
             E-value threshold used to define homologous gene.
-        per_identit : float
+        per_identity : float
             Percent identity threshold used to define a homologous gene.
         per_aln_len : float
             Alignment length threshold used to define a homologous gene.
