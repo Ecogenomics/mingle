@@ -57,7 +57,7 @@ class Reduce():
 
         genes_to_retain = set()
         for line in open(gene_id_file):
-            genes_to_retain.add(line.strip())
+            genes_to_retain.add(line.split()[0].strip())
 
         return genes_to_retain
 
