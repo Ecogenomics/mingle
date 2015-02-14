@@ -114,6 +114,8 @@ class SeqIO(object):
                 else:
                     seq.append(line[0:-1])
 
+            # read last sequence
+            yield seq_id, ''.join(seq)
         except:
             print  "[Error] Failed to process sequence file: " + fasta_file
             sys.exit()
