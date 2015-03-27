@@ -7,10 +7,12 @@ import os
 import subprocess
 import re
 import IPython
+import shutil 
 from mingle.phil_format_database_parser import PhilFormatDatabaseParser
 from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.taxonomy_string import TaxonomyString
 from graftm.getaxnseq import Tax_n_Seq_builder
+from graftm.scikit_tree_rerooter import Rerooter
 
 # Inputs:
 # greengenes file from genome tree database => provides taxonomy
@@ -22,6 +24,7 @@ parser.add_argument('--hmm', help='Hidden Markov model to search with', required
 parser.add_argument('--greengenes', help='.greengenes file to define taxonomy', required=True)
 parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
 parser.add_argument('--preparation_folder', help='store intermediate files in this folder', default=None, required=True)
+parser.add_argument('--nodes', help='node names to re-root with', default=None, required=True)
 parser.add_argument('--evalue', help='evalue cutoff for the hmmsearch (default = %s)' % default_evalue, default=default_evalue)
 parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
 parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public (default = False)', default=False)
@@ -44,53 +47,44 @@ def aligned_sequences_from_sto_file(sto_file):
 
 # Correct known instances of dodgy Archaea taxonomy. Desparate times, desparate measures.
 def check_taxonomy(tax):
+    bad_tax = False
+    bt = []
     tax_suffix = ['d__', 'k__', 'p__', 'c__', 'o__', 'f__', 'g__', 's__']
     for ace_id, taxes in ace_id_to_taxonomy.items():
         tax_set = tax.split('; ')
-        if 'd__Archaea' in tax_set:
-            if 'k__Nanoarchaeota' in tax_set:
-                del tax_set[-1]
+                
+        if 'k__Crenarchaeota' in tax_set:
+                
+            if tax_set[2] == 'p__':
+                del tax_set[-1]    
                 for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
+                    tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
                 return '; '.join(tax_set)
-                
-            elif 'k__Crenarchaeota' in tax_set:
-                
-                if tax_set[2] == 'p__':
-                    del tax_set[-1]    
-                    for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
-                    return '; '.join(tax_set)
-                elif tax_set[2] == 'p__Thaumarchaeota':
-                    del tax_set[4]
-                    for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                    return '; '.join(tax_set)    
-                    
-                elif tax_set[2] == 'p__Crenarchaeota':
-                    del tax_set[3]
-                    for idx, item in enumerate(tax_set):
-                        tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                    return '; '.join(tax_set)    
-                    
-            elif 'k__Euryarchaeota' in tax_set:
-                del tax_set[1]
+            elif tax_set[2] == 'p__Thaumarchaeota':
+                del tax_set[4]
                 for idx, item in enumerate(tax_set):
                     tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                return '; '.join(tax_set)
-                
-            
-            else:
-                print "Bad taxonomy that hasn't been encountered before"
-                exit(0)
+                return '; '.join(tax_set)    
                     
+            elif tax_set[2] == 'p__Crenarchaeota':
+                del tax_set[3]
+                for idx, item in enumerate(tax_set):
+                    tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
+                return '; '.join(tax_set)    
+                    
+        elif 'k__Euryarchaeota' in tax_set:
+            del tax_set[1]
+            for idx, item in enumerate(tax_set):
+                tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
+            return '; '.join(tax_set)
+
         
         else:
-            print "Bad taxonomy that hasn't been encountered before"
-            exit(0)  
-
-
-
+                
+            del tax_set[-1]
+            for idx, item in enumerate(tax_set):
+                tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
+            return '; '.join(tax_set)
 
 
 # Create temporary directory for everything to go in
@@ -109,6 +103,7 @@ for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
     ace_id = entry['db_name']
     if options.public:
         if entry['core_list_status'] == 'public':
+            ## TODO: filter to include genoems starting with 'A' - these genomes are also public. Ask Donovan
             ids_used.append(entry['db_name'])
             try:
                 taxonomy = entry['genome_tree_tax_string']
@@ -130,6 +125,7 @@ logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
 
 logging.info('Creating simple taxonomy format file..')
 simple_taxonomy_file_path = os.path.join(dump_directory, 'taxonomy.csv')
+a = []
 with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
 
     for ace_id, taxes in ace_id_to_taxonomy.items():
@@ -144,15 +140,15 @@ with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
                 taxonomy_fh.write("\t")
                 taxonomy_fh.write(tax) #Need the full path including empty names for tax2tree
                 taxonomy_fh.write("\n")
+                
             else:
                 logging.warn("Found unexpected number of taxonomy levels in this taxonomy string, not outputing this taxonomy: %s. Attempting to correct..." % tax)
                 tax2 = check_taxonomy(tax)
                 taxonomy_fh.write(ace_id)
                 taxonomy_fh.write("\t")
                 taxonomy_fh.write(tax2) # Need the full path including empty names for tax2tree
-
                 taxonomy_fh.write("\n")
-                
+
 logging.info('taxonomy file created.')
 
 logging.info('Create taxit taxonomy and seqinfo file.')
@@ -351,16 +347,39 @@ logging.info("Included %s sequences in the alignment" % (sequence_number))
 if sequence_number == 0: raise Exception("No matching sequences detected, cannot create tree")
 if sequence_number < 4: logging.warn("Too few sequences detected (%s)!!!!, the output is unlikely to be informative" % sequence_number)
 
+
 # Make a tree, saving the log information
 logging.info("Creating phylogenetic tree..")
 fasttree_output = os.path.join(dump_directory, 'fasttree.tree')
 fasttree_log_file = os.path.join(dump_directory, 'fasttree.log')
 subprocess.check_call(["bash", "-c", "FastTreeMP -log %s %s > %s" % (fasttree_log_file, aligned_sequences_file, fasttree_output)])
 
+# Reroot the tree
+logging.info("Rerooting phylogenetic tree..")
+rerooted_tree = os.path.join(dump_directory, 'rerooted.tree')
+Rerooter().main(fasttree_output, rerooted_tree, options.nodes)
+
+## TODO - remake log files 
+logging.info("Creating log file for rerooted tree..")
+rerooted_log = os.path.join(dump_directory, 'rerooted.log')
+rerooted2_tree = os.path.join(dump_directory, 'rerooted2.tree')
+cmd = "FastTreeMP -nome -mllen -intree %s -log %s %s > %s" % (rerooted_tree, rerooted_log, aligned_sequences_file, rerooted2_tree)
+subprocess.check_call(["bash", "-c", cmd])
+
 # Create the final reference package
-logging.info("Running taxit create")
+logging.info("Creating reference package by taxit create")
 base = os.path.basename(options.hmm).split('.')[0]
 refpkg_output = '%s.refpkg' % (base)
-command = "taxit create -f %s -P %s -t %s -s %s -c -l %s -T %s -i %s" % (aligned_sequences_file, refpkg_output, fasttree_output, fasttree_log_file, base, taxtastic_tax, taxtastic_seq)
+command = "taxit create -f %s -P %s -t %s -s %s -c -l %s -T %s -i %s --no-reroot" % (aligned_sequences_file, refpkg_output, rerooted2_tree, rerooted_log, base, taxtastic_tax, taxtastic_seq)
 subprocess.check_call(["/bin/bash", "-c", command])
+
+
+# Move houses
+logging.info("Compiling GPKG")
+gpkg_name = base + "_gpkg"
+os.mkdir(gpkg_name)
+shutil.move(options.hmm, gpkg_name)
+shutil.move(refpkg_output, gpkg_name)
+
+
 logging.info("Finished")
