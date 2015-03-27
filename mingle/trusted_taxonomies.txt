@@ -1,0 +1,5 @@
+k__Bacteria; p__Firmicutes; c__Clostridia; o__Clostridiales; f__Thermoanaerobacteraceae,k__Bacteria; p__Firmicutes; c__Clostridia; o__Clostridiales; f__Thermoanaerobacteraceae_1
+k__Bacteria; p__[Epsilonae]; c__Deltaproteobacteria,k__Bacteria; p__[Epsilonae]; c__Deltaproteobacteria_1
+k__Bacteria; p__Firmicutes; c__Clostridia; o__Clostridiales; f__Lachnospiraceae; g__Ruminococcus,k__Bacteria; p__Firmicutes; c__Clostridia; o__Clostridiales; f__Lachnospiraceae; g__Ruminococcus_1
+k__Bacteria; p__Chlamydiae; c__Chlamydiia; o__Chlamydiales; f__Chlamydiaceae; g__Chlamydophila; s__pneumoniae,k__Bacteria; p__Chlamydiae; c__Chlamydiia; o__Chlamydiales; f__Chlamydiaceae; g__Chlamydophila; s__pneumoniae_1
+k__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Streptococcaceae; g__Streptococcus; s__thermophilus,k__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Streptococcaceae; g__Streptococcus; s__thermophilus_1

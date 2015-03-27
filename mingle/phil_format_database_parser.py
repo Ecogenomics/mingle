@@ -24,6 +24,8 @@
 # ...
 #
 # The particular keys are not necessarily as above, just the = BEGIN/END and general layout
+
+
 class PhilFormatDatabaseParser:
     def each(self, file_handle):
         # state machine - are we inside or outside a BEGIN/END block
@@ -44,6 +46,7 @@ class PhilFormatDatabaseParser:
                 
             elif line == 'END':
                 if state == 'inside':
+
                     yield current_hash
                     state = 'outside'
                 else:
@@ -65,6 +68,8 @@ class PhilFormatDatabaseParser:
     def write(self, hashes, io, output_order):
         is_first = True
         for dahash in hashes:
+            
+            exit(0)
             if is_first:
                 is_first = False
             else:
