@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 ###############################################################################
 #                                                                             #
 #    This program is free software: you can redistribute it and/or modify     #
@@ -17,29 +15,56 @@
 #                                                                             #
 ###############################################################################
 
-__author__ = "Ben Woodcroft"
+__author__ = "Donovan Parks"
 __copyright__ = "Copyright 2015"
-__credits__ = ["Ben Woodcroft"]
+__credits__ = ["Donovan Parks"]
 __license__ = "GPL3"
-__maintainer__ = "Ben Woodcroft"
-__email__ = ""
+__maintainer__ = "Donovan Parks"
+__email__ = "donovan.parks@gmail.com"
 __status__ = "Development"
 
+import os
 import sys
-from subprocess import Popen, PIPE, STDOUT
+import logging
+import subprocess
 
-# Usage: alignAsNecessary.py fasta_file hmm output_stockholm
 
-# read stdin
-std = sys.stdin.read()
+class MuscleError(BaseException):
+    pass
 
-# if stdin empty, do nothing
-# otherwise run cmd to fxtract/hmmalign
-if std != '':
-  command = 'fxtract -X -H -f /dev/stdin %s | hmmalign %s /dev/stdin > %s' % (
-  sys.argv[1],
-  sys.argv[2],
-  sys.argv[3])
 
-  pr = Popen(["/bin/bash", "-c", command], stdin=PIPE, stderr=STDOUT, stdout=PIPE)
-  stdout = pr.communicate(input=std)[0]
+class MuscleRunner():
+    """Wrapper for running muscle."""
+
+    def __init__(self):
+        """Initialization."""
+        self.logger = logging.getLogger()
+
+        self._check_for_muscle()
+
+    def run(self, seqs, output_file, log_file):
+        """Apply muscle to query sequences.
+
+        Parameters
+        ----------
+        seqs : dict[seq_id] -> seq
+            Sequence to alignment.
+        output_file: str
+            Output file containing multiple sequence alignment.
+        log_file: str
+            Output file containing information about running of muscle.
+        """
+
+        cmd = 'muscle -quiet -in %s -out %s -log %s' % (seqs, output_file, log_file)
+        os.system(cmd)
+
+    def _check_for_muscle(self):
+        """Check to see if muscle is on the system before we try to run it."""
+
+        # Assume that a successful blast -help returns 0 and anything
+        # else returns non-zero
+        try:
+            subprocess.call(['muscle', '-h'], stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
+        except:
+            self.logger.error("  [Error] Make sure muscle is on your system path.")
+            sys.exit()

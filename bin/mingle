@@ -1,42 +1,104 @@
 #!/usr/bin/env python
 
+###############################################################################
+#                                                                             #
+#    This program is free software: you can redistribute it and/or modify     #
+#    it under the terms of the GNU General Public License as published by     #
+#    the Free Software Foundation, either version 3 of the License, or        #
+#    (at your option) any later version.                                      #
+#                                                                             #
+#    This program is distributed in the hope that it will be useful,          #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of           #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the            #
+#    GNU General Public License for more details.                             #
+#                                                                             #
+#    You should have received a copy of the GNU General Public License        #
+#    along with this program. If not, see <http://www.gnu.org/licenses/>.     #
+#                                                                             #
+###############################################################################
+
+__author__ = "Joel Boyd, Ben Woodcroft, Donovan Parks"
+__copyright__ = "Copyright 2015"
+__credits__ = ["Joel Boyd", "Ben Woodcroft", "Donovan Parks"]
+__license__ = "GPL3"
+__maintainer__ = "Joel Boyd, Ben Woodcroft, Donovan Parks"
+__email__ = "donovan.parks@gmail.com"
+__status__ = "Development"
+
 import argparse
 import logging
 import sys
 import os
 import subprocess
-import re
 import IPython
-import shutil 
+import shutil
 from mingle.phil_format_database_parser import PhilFormatDatabaseParser
+from mingle.arb_parser import ArbParser
 from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.taxonomy_string import TaxonomyString
+from mingle.blast_workflow import BlastWorkflow
+from mingle.reduce_workflow import Reduce
+from mingle.bootstrap import Bootstrap
 from graftm.getaxnseq import Tax_n_Seq_builder
 from graftm.scikit_tree_rerooter import Rerooter
 
-# Inputs:
-# greengenes file from genome tree database => provides taxonomy
-# HMM => the HMM to search with
-# path to proteome files - one for each genome => sequences to be put into the tree
 default_evalue = '1e-20'
-parser = argparse.ArgumentParser(description='''For a given HMM, create a phylogenetic tree and "Phil format" .greengenes file from the an ACE genome tree data (after the database info has been extracted)''')
-parser.add_argument('--hmm', help='Hidden Markov model to search with', required=True)
-parser.add_argument('--greengenes', help='.greengenes file to define taxonomy', required=True)
-parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
-parser.add_argument('--preparation_folder', help='store intermediate files in this folder', default=None, required=True)
-parser.add_argument('--nodes', help='node names to re-root with', default=None, required=True)
-parser.add_argument('--evalue', help='evalue cutoff for the hmmsearch (default = %s)' % default_evalue, default=default_evalue)
-parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
-parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public (default = False)', default=False)
 
-options = parser.parse_args()
+# set logging level
+logging.basicConfig(level=logging.DEBUG,
+                        format="[%(asctime)s] %(levelname)s: %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%S")
 
-# module load taxtastic hmmer fxtract fasttree
-logging.basicConfig(level=logging.DEBUG)
+
+class CustomHelpFormatter(argparse.HelpFormatter):
+    def _split_lines(self, text, width):
+        return text.splitlines()
+
+    def _get_help_string(self, action):
+        h = action.help
+        if '%(default)' not in action.help:
+            if action.default != '' and action.default != [] and action.default != None and action.default != False:
+                if action.default is not argparse.SUPPRESS:
+                    defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
+
+                    if action.option_strings or action.nargs in defaulting_nargs:
+                        if '\n' in h:
+                            lines = h.splitlines()
+                            lines[0] += ' (default: %(default)s)'
+                            h = '\n'.join(lines)
+                        else:
+                            h += ' (default: %(default)s)'
+            return h
+
+    def _fill_text(self, text, width, indent):
+        return ''.join([indent + line for line in text.splitlines(True)])
+
+
+def version():
+    binDir = os.path.dirname(os.path.realpath(__file__))
+    versionFile = open(os.path.join(binDir, '..', 'mingle', 'VERSION'))
+    return versionFile.read().strip()
+
+
+def printHelp():
+    print ''
+    print '                ...::: Mingle :::...'''
+    print '''\
+
+  Gene tree inference:
+    hmm        -> Infer gene tree using a HMM
+    blast      -> Infer gene tree using BLAST
+
+  Tree utilities:
+    reduce     -> Infer tree for reduced set of genes
+    bootstrap  -> Calculate bootstrap support for tree
+    '''
+
 
 # Given an iterable (e.g. a list) of taxonomies, write a new file containing a taxtastic-compatible
 # taxonomy file to the given (presumed open) file handle. The ranks is a list of
 # e.g. ['phylum','class']
+
 
 # Return a hash of sequence name => sequence from the given stockholm
 # file. Only return the sequence that is aligned to the HMM (not the lower
@@ -46,17 +108,18 @@ def aligned_sequences_from_sto_file(sto_file):
 
 
 # Correct known instances of dodgy Archaea taxonomy. Desparate times, desparate measures.
-def check_taxonomy(tax):
+
+def check_taxonomy(tax, ace_id_to_taxonomy):
     bad_tax = False
     bt = []
     tax_suffix = ['d__', 'k__', 'p__', 'c__', 'o__', 'f__', 'g__', 's__']
     for ace_id, taxes in ace_id_to_taxonomy.items():
         tax_set = tax.split('; ')
-                
+
         if 'k__Crenarchaeota' in tax_set:
-                
+
             if tax_set[2] == 'p__':
-                del tax_set[-1]    
+                del tax_set[-1]
                 for idx, item in enumerate(tax_set):
                     tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
                 return '; '.join(tax_set)
@@ -64,46 +127,49 @@ def check_taxonomy(tax):
                 del tax_set[4]
                 for idx, item in enumerate(tax_set):
                     tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                return '; '.join(tax_set)    
-                    
+                return '; '.join(tax_set)
+
             elif tax_set[2] == 'p__Crenarchaeota':
                 del tax_set[3]
                 for idx, item in enumerate(tax_set):
                     tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
-                return '; '.join(tax_set)    
-                    
+                return '; '.join(tax_set)
+
         elif 'k__Euryarchaeota' in tax_set:
             del tax_set[1]
             for idx, item in enumerate(tax_set):
                 tax_set[idx] = item.replace(item[:3],tax_suffix[idx+1])
             return '; '.join(tax_set)
 
-        
+
         else:
-                
+
             del tax_set[-1]
             for idx, item in enumerate(tax_set):
                 tax_set[idx] = item.replace(tax_suffix[idx],tax_suffix[idx+1])
             return '; '.join(tax_set)
 
 
-# Create temporary directory for everything to go in
-dump_directory = options.preparation_folder
-if os.path.exists(dump_directory):
-    raise Exception("Prep folder %s already exists, cowardly refusing to proceed" % dump_directory)
-os.mkdir(dump_directory)
+def hmm_workflow(options):
+    """Infer gene tree using HMM workflow."""
 
-
-# Read Phil format file, creating a hash of ACE ID to taxonomy
-logging.info('Reading taxonomy information from .greengenes file..')
-ace_id_to_taxonomy = {}
-ace_id_to_greengenes_hash = {} 
-ids_used = []
-for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
-    ace_id = entry['db_name']
-    if options.public:
-        if entry['core_list_status'] == 'public':
-            ## TODO: filter to include genoems starting with 'A' - these genomes are also public. Ask Donovan
+    # Read Phil format file, creating a hash of ACE ID to taxonomy
+    logging.info('Reading taxonomy information from ARB GreenGenes file.')
+    ace_id_to_taxonomy = {}
+    ace_id_to_greengenes_hash = {}
+    ids_used = []
+    for entry in ArbParser().each(open(options.greengenes)):
+        ace_id = entry['db_name']
+        if options.public:
+            if entry['core_list_status'] == 'public':
+                ids_used.append(entry['db_name'])
+                try:
+                    taxonomy = entry['genome_tree_tax_string']
+                    ace_id_to_taxonomy[ace_id] = TaxonomyString(taxonomy).full_name()
+                    ace_id_to_greengenes_hash[ace_id] = entry
+                except KeyError:
+                    logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
+        if not options.public:
             ids_used.append(entry['db_name'])
             try:
                 taxonomy = entry['genome_tree_tax_string']
@@ -111,275 +177,344 @@ for entry in PhilFormatDatabaseParser().each(open(options.greengenes)):
                 ace_id_to_greengenes_hash[ace_id] = entry
             except KeyError:
                 logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
-    if not options.public: 
-        ids_used.append(entry['db_name'])
-        try:
-            taxonomy = entry['genome_tree_tax_string']
-            ace_id_to_taxonomy[ace_id] = TaxonomyString(taxonomy).full_name()
-            ace_id_to_greengenes_hash[ace_id] = entry
-        except KeyError:
-            logging.warn("taxonomy information not found in Phil format file for ID: %s, skipping" % ace_id)
 
-logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
+    logging.info("Read in taxonomy for %s genomes" % len(ace_id_to_taxonomy))
+
+    logging.info('Creating simple taxonomy format file..')
+    simple_taxonomy_file_path = os.path.join(options.output_dir, 'taxonomy.csv')
+    with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
+
+        for ace_id, _taxes in ace_id_to_taxonomy.items():
+            tax = ace_id_to_greengenes_hash[ace_id]['genome_tree_tax_string']
+
+            if tax:
+                if tax.endswith(';'):
+                    tax = tax[:-1]
+
+                if TaxonomyString(tax).num_levels() == 7:
+                    taxonomy_fh.write(ace_id)
+                    taxonomy_fh.write("\t")
+                    taxonomy_fh.write(tax)  # Need the full path including empty names for tax2tree
+                    taxonomy_fh.write("\n")
+                else:
+                    logging.warn("Found unexpected number of taxonomy levels in this taxonomy string, not outputing this taxonomy: %s. Attempting to correct..." % tax)
+                    tax2 = check_taxonomy(tax,ace_id_to_taxonomy)
+                    
+                    taxonomy_fh.write(ace_id)
+                    taxonomy_fh.write("\t")
+                    taxonomy_fh.write(tax2)  # Need the full path including empty names for tax2tree
+
+                    taxonomy_fh.write("\n")
+
+    logging.info('taxonomy file created.')
+
+    logging.info('Create taxit taxonomy and seqinfo file.')
+
+    taxtastic_tax = os.path.join(options.output_dir, 'tax_info.csv')
+    taxtastic_seq = os.path.join(options.output_dir, 'seq_info.csv')
+    Tax_n_Seq_builder().gg_taxonomy_builder(simple_taxonomy_file_path, taxtastic_tax, taxtastic_seq)
+    logging.info('taxonomy and seqinfo file created.')
+
+    u_proteome_files = os.path.join(options.output_dir, 'used_proteome_files.txt')
+    ids_used = set(ids_used)
+    ids_files = []
+    for f in open(options.proteomes_list_file, 'r'):
+        if any(ids in f for ids in ids_used):
+            ids_files.append(f)
+    with open(u_proteome_files, 'w') as prot_files:
+        for i in ids_files:
+            prot_files.write(i)
+
+    # Read each of the proteome paths and strip() them
+    with open(u_proteome_files) as f:
+        proteomes = [pro.strip() for pro in f]
+
+    if len(proteomes) < 1:
+        raise Exception("Error: no proteome files found, cannot continue")
+    logging.info("Read in %s proteome files for processing e.g. %s" % (len(proteomes), proteomes[0]))
+
+    # Run hmmsearch on each of the proteomes
+    logging.info("Running hmmsearches..")
+    hmmsearches_directory = os.path.join(options.output_dir, 'hmmsearches')
+    os.makedirs(hmmsearches_directory)
+    # TODO: the below fails if the given proteome list file is a pipe as opposed to a regular file. This script should read the list file,
+    # and then directly pass the list to parallel, and then all will be well.
+    command = "cat %s |parallel --gnu -j %s hmmsearch -E %g --domtblout %s/{/}.domtblout.csv %s {} '>' /dev/null" % (
+      u_proteome_files,
+      options.cpus,
+      options.evalue,
+      hmmsearches_directory,
+      options.hmm)
+    logging.info("Running cmd: %s" % command)
+    subprocess.check_call(["/bin/bash", "-c", command])
 
 
-logging.info('Creating simple taxonomy format file..')
-simple_taxonomy_file_path = os.path.join(dump_directory, 'taxonomy.csv')
-a = []
-with open(simple_taxonomy_file_path, 'w') as taxonomy_fh:
+    # Extract the proteins from each proteome that were hits
+    # hmmalign the hits back to the HMM
+    logging.info("Extracting hit proteins from proteome files and aligning hit proteins back to HMM..")
+    aligned_proteins_directory = os.path.join(options.output_dir, 'hmmaligns')
+    os.makedirs(aligned_proteins_directory)
 
-    for ace_id, taxes in ace_id_to_taxonomy.items():
-        tax = ace_id_to_greengenes_hash[ace_id]['genome_tree_tax_string']
-        
-        if tax:
-            if tax.endswith(';'):
-                tax = tax[:-1]
-                
-            if TaxonomyString(tax).num_levels() == 7:
-                taxonomy_fh.write(ace_id)
-                taxonomy_fh.write("\t")
-                taxonomy_fh.write(tax) #Need the full path including empty names for tax2tree
-                taxonomy_fh.write("\n")
-                
+    # hmmalign ../nifH.HMM <(fxtract -H -f <(grep -v ^\# ../hmmsearches/C00001470.fna.faa.domtblout.csv |awk '{print $1}' |sort |uniq) ../proteomes/C00001470.fna.faa) |seqmagick convert --input-format stockholm --output-format fasta - -
+    # grep -v ^\# C00001470.fna.faa.domtblout.csv |awk '{print $1}' |sort |uniq |fxtract -H -f /dev/stdin ../proteomes/C00001470.fna.faa
+    align_and_extract_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'alignAsNecessary.py')
+    # Usage: alignAsNecessary.py fasta_file hmm output_stockholm
+
+    command = "cat %s |parallel --gnu -j %s grep -v ^\# %s/{/}.domtblout.csv '|' cut -d'\" \"' -f1 '|' sort -u '|' %s {} %s %s/{/}.sto" % (
+      u_proteome_files,
+      options.cpus,
+      hmmsearches_directory,
+      align_and_extract_script,
+      options.hmm,
+      aligned_proteins_directory,
+      )
+    logging.info("Running cmd: %s" % command)
+    subprocess.check_call(["/bin/bash", "-c", command])
+
+    # Remove the unaligned parts of the stockholm file
+    logging.info("Concatenating and renaming files into a single aligned fasta file and creating Phil format output file..")
+    # => use biopython's sto parser
+    # For each of the hmmaligned files, read in the
+    seqinfo_file = os.path.join(options.output_dir, 'seq_info.csv')
+    sequence_number = 0
+    greengenes_output_hashes = []
+
+    aligned_sequences_file = os.path.join(options.output_dir, 'aligned.fasta')
+    duplicates = {}
+
+    with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
+        for proteome in proteomes:
+            # Skip if the file does not exist - this indicates there was no hits
+            sto_path = os.path.join(aligned_proteins_directory, "%s.sto" % os.path.basename(proteome))
+            if not os.path.exists(sto_path):
+                continue
+
+            db_id = os.path.basename(proteome).split('.')[0]
+            seqs = aligned_sequences_from_sto_file(sto_path)
+            n_seqs = len(seqs.keys())
+            s = [seqs[i] for i in seqs.keys()]
+
+            try:
+                tax = ace_id_to_taxonomy[db_id]
+                key_values = ace_id_to_greengenes_hash[db_id]
+
+
+            except KeyError:
+                tax = None
+                key_values = None
+
+            if n_seqs > 1:
+                logging.info("%s has multiple sequences. Renaming..." % (db_id))
+                names = [db_id + 'n' + str(x) for x in range(0, n_seqs)]
+                duplicates[db_id] = names
             else:
-                logging.warn("Found unexpected number of taxonomy levels in this taxonomy string, not outputing this taxonomy: %s. Attempting to correct..." % tax)
-                tax2 = check_taxonomy(tax)
-                taxonomy_fh.write(ace_id)
-                taxonomy_fh.write("\t")
-                taxonomy_fh.write(tax2) # Need the full path including empty names for tax2tree
-                taxonomy_fh.write("\n")
+                names = [db_id]
 
-logging.info('taxonomy file created.')
+            for name, seq in zip(names, s):
+                aligned_sequences_fh.write(">%s\n" % name)
+                aligned_sequences_fh.write("%s\n" % seq)
+                sequence_number += 1
 
-logging.info('Create taxit taxonomy and seqinfo file.')
+                # Writing a mingle readable file
+                output_description_hash = {}
+                output_description_hash['db_name'] = name
+                output_description_hash['prokMSA_id'] = name
+                output_description_hash['name'] = name
+                output_description_hash['acc'] = name
+                output_description_hash['aligned_seq'] = seq
 
-taxtastic_tax = os.path.join(dump_directory, 'tax_info.csv')
-taxtastic_seq = os.path.join(dump_directory, 'seq_info.csv')
-Tax_n_Seq_builder().gg_taxonomy_builder(simple_taxonomy_file_path, taxtastic_tax, taxtastic_seq)
-logging.info('taxonomy and seqinfo file created.')
+                if tax is not None:
+                    direct_copy_fields = [
+                                        'organism',
+                                        'genome_tree_description',
+                                        # 'prokMSA_id',
+                                        'owner',
+                                        'genome_tree_tax_string',
+                                        'greengenes_tax_string',
+                                        'blast_hits_16s',
+                                        'img_tax_string',
+                                        'img_tax_tax2tree_corrected',
+                                        'checkm_completeness',
+                                        'checkm_contamination',
+                                        'core_list_status',
+                                        'warning',
+                                            ]
 
-u_proteome_files = os.path.join(dump_directory, 'used_proteome_files.txt')
-ids_used = set(ids_used)
-ids_files = []
-for f in open(options.proteomes_list_file, 'r'):
-    if any(ids in f for ids in ids_used):
-        ids_files.append(f)
-with open(u_proteome_files, 'w') as prot_files:
-    for i in ids_files:
-        prot_files.write(i)
-    
-# Read each of the proteome paths and strip() them
-with open(u_proteome_files) as f:
-    proteomes = [pro.strip() for pro in f]
+                    for field in direct_copy_fields:
+                        try:
+                            output_description_hash[field] = key_values[field]
+                        except KeyError:
+                            pass  # if it ain't there, don't include it
 
-if len(proteomes) < 1: raise Exception("Error: no proteome files found, cannot continue")
-logging.info("Read in %s proteome files for processing e.g. %s" % (len(proteomes), proteomes[0]))
-
-
-
-# Run hmmsearch on each of the proteomes
-logging.info("Running hmmsearches..")
-hmmsearches_directory = os.path.join(dump_directory, 'hmmsearches')
-os.makedirs(hmmsearches_directory)
-# TODO: the below fails if the given proteome list file is a pipe as opposed to a regular file. This script should read the list file,
-# and then directly pass the list to parallel, and then all will be well.
-command = "cat %s |parallel --gnu -j %s hmmsearch -E %s --domtblout %s/{/}.domtblout.csv %s {} '>' /dev/null" % (
-  u_proteome_files,
-  options.cpus,
-  options.evalue,
-  hmmsearches_directory,
-  options.hmm)
-logging.info("Running cmd: %s" % command)
-subprocess.check_call(["/bin/bash", "-c", command])
+                greengenes_output_hashes.append(output_description_hash)
 
 
-# Extract the proteins from each proteome that were hits
-# hmmalign the hits back to the HMM
-logging.info("Extracting hit proteins from proteome files and aligning hit proteins back to HMM..")
-aligned_proteins_directory = os.path.join(dump_directory, 'hmmaligns')
-os.makedirs(aligned_proteins_directory)
-# hmmalign ../nifH.HMM <(fxtract -H -f <(grep -v ^\# ../hmmsearches/C00001470.fna.faa.domtblout.csv |awk '{print $1}' |sort |uniq) ../proteomes/C00001470.fna.faa) |seqmagick convert --input-format stockholm --output-format fasta - -
-# grep -v ^\# C00001470.fna.faa.domtblout.csv |awk '{print $1}' |sort |uniq |fxtract -H -f /dev/stdin ../proteomes/C00001470.fna.faa
-align_and_extract_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'alignAsNecessary.py')
-# Usage: alignAsNecessary.py fasta_file hmm output_stockholm
+    # Actually write phil readable file
+    logging.info("Writing output Phil format file..")
+    phil_format_output_file = os.path.join(options.output_dir, 'mingle.greengenes')
 
-command = "cat %s |parallel --gnu -j %s grep -v ^\# %s/{/}.domtblout.csv '|' cut -d'\" \"' -f1 '|' sort -u '|' %s {} %s %s/{/}.sto" % (
-  u_proteome_files,
-  options.cpus,
-  hmmsearches_directory,
-  align_and_extract_script,
-  options.hmm,
-  aligned_proteins_directory,
-  )
-logging.info("Running cmd: %s" % command)
-subprocess.check_call(["/bin/bash", "-c", command])
+    with open(phil_format_output_file, 'w') as f:
+        ArbParser().write(greengenes_output_hashes, f)
 
-# Remove the unaligned parts of the stockholm file
-logging.info("Concatenating and renaming files into a single aligned fasta file and creating Phil format output file..")
-# => use biopython's sto parser
-# For each of the hmmaligned files, read in the
-seqinfo_file = os.path.join(dump_directory, 'seq_info.csv')
-sequence_number = 0
-greengenes_output_hashes = []
+    logging.info("Correcting the sequence names of duplicates in the seq_info file.")
+    new_seq = []
+    with open(taxtastic_seq, 'r') as f:
+        ids = [i.strip().split(',') for i in f]
 
-aligned_sequences_file = os.path.join(dump_directory, 'aligned.fasta')
-seen_ids = []
-duplicates = {}
-
-with open(aligned_sequences_file, 'w') as aligned_sequences_fh:
-    for proteome in proteomes:
-        # Skip if the file does not exist - this indicates there was no hits
-        sto_path = os.path.join(aligned_proteins_directory, "%s.sto" % os.path.basename(proteome))
-        if not os.path.exists(sto_path): continue
-
-        db_id = os.path.basename(proteome).split('.')[0]
-        seqs = aligned_sequences_from_sto_file(sto_path)
-        n_seqs = len(seqs.keys())
-        s = [seqs[i] for i in seqs.keys()]
-        
-        
-        try:
-            tax = ace_id_to_taxonomy[db_id]
-            key_values = ace_id_to_greengenes_hash[db_id]
-        
-        except KeyError:
-            tax = None
-            key_values = None
-
-
-        if n_seqs > 1:
-            logging.info("%s has multiple sequences. Renaming..." % (db_id))
-            names = [db_id+'n'+str(x) for x in range(0, n_seqs)]
-            duplicates[db_id] = names
-        else:
-            names = [db_id]
-        
-        
-        for name, seq in zip(names, s):
-            aligned_sequences_fh.write(">%s\n" % name)
-            aligned_sequences_fh.write("%s\n" % seq)
-            sequence_number += 1 
-            
-            # Writing a mingle readable file
-            output_description_hash = {}
-            output_description_hash['db_name'] = name
-            output_description_hash['prokMSA_id'] = name
-            output_description_hash['name'] = name
-            output_description_hash['acc'] = name
-            output_description_hash['aligned_seq'] = seq
-
-
-            if tax is not None:
-
-                direct_copy_fields = [
-                                    'organism',
-                                    'genome_tree_description',
-                                    # 'prokMSA_id',
-                                    'owner',
-                                    'genome_tree_tax_string',
-                                    'greengenes_tax_string',
-                                    'blast_hits_16s',
-                                    'img_tax_string',
-                                    'img_tax_tax2tree_corrected',
-                                    'checkm_completeness',
-                                    'checkm_contamination',
-                                    'core_list_status',
-                                    'warning',
-                                        ]
+        for i in ids:
+            try:
+                for new in duplicates[i[0]]:
+                    new_seq = new_seq + [','.join([new, i[1]])]
+            except:
+                new_seq = new_seq + [','.join(i)]
                 
-                for field in direct_copy_fields:
-                    try:
-                        output_description_hash[field] = key_values[field]
-                    except KeyError:
-                        pass #if it ain't there, don't include it
-            
-            greengenes_output_hashes.append(output_description_hash)
+    with open(taxtastic_seq, 'w') as f:
+        for entry in new_seq:
+            f.write("%s\n" % entry)
+
+    logging.info("Included %s sequences in the alignment" % (sequence_number))
+    if sequence_number == 0:
+        raise Exception("No matching sequences detected, cannot create tree")
+    if sequence_number < 4:
+        logging.warn("Too few sequences detected (%s)!!!!, the output is unlikely to be informative" % sequence_number)
 
 
-#Actually write phil readable file
-logging.info("Writing output Phil format file..")
-phil_format_output_file = os.path.join(dump_directory, 'mingle.greengenes')
-
-output_order = [
-                'prokMSA_id',
-                'db_name',
-                'name',
-                'acc',
-                'organism',
-                'genome_tree_description',
-                'owner',
-                'genome_tree_tax_string',
-                'greengenes_tax_string',
-                'blast_hits_16s',
-                'img_tax_string',
-                'img_tax_tax2tree_corrected',
-                'checkm_completeness',
-                'checkm_contamination',
-                'core_list_status',
-                'warning',
-                'aligned_seq',
-                ]
-
-with open(phil_format_output_file, 'w') as f:
-    PhilFormatDatabaseParser().write(greengenes_output_hashes, f, output_order)
-
-
-
-
-              
-logging.info("Correcting the sequence names of duplicates in the seq_info file.")     
-new_seq = []
-with open(taxtastic_seq, 'r') as f:
-    ids = [i.strip().split(',') for i in f]
+    # Make a tree, saving the log information
+    logging.info("Creating phylogenetic tree..")
+    fasttree_output = os.path.join(options.output_dir, 'fasttree.tree')
+    fasttree_log_file = os.path.join(options.output_dir, 'fasttree.log')
+    subprocess.check_call(["bash", "-c", "FastTreeMP -log %s %s > %s" % (fasttree_log_file, aligned_sequences_file, fasttree_output)])
     
-    for i in ids:
-        try:
-            for new in duplicates[i[0]]:
-                new_seq = new_seq + [','.join([new, i[1]])]
-        except:
-            new_seq = new_seq + [','.join(i)]
+    # Reroot the tree
+    logging.info("Rerooting phylogenetic tree..")
+    rerooted_tree = os.path.join(options.output_dir, 'rerooted.tree')
+    Rerooter().main(fasttree_output, rerooted_tree, options.nodes)
+    
+    ## TODO - remake log files
+    logging.info("Creating log file for rerooted tree..")
+    rerooted_log = os.path.join(options.output_dir, 'rerooted.log')
+    rerooted2_tree = os.path.join(options.output_dir, 'rerooted2.tree')
+    cmd = "FastTreeMP -nome -mllen -intree %s -log %s %s > %s" % (rerooted_tree, rerooted_log, aligned_sequences_file, rerooted2_tree)
+    subprocess.check_call(["bash", "-c", cmd])
+    
+    # Create the final reference package
+    logging.info("Creating reference package by taxit create")
+    base = os.path.basename(options.hmm).split('.')[0]
+    refpkg_output = '%s.refpkg' % (base)
+    command = "taxit create -f %s -P %s -t %s -s %s -c -l %s -T %s -i %s --no-reroot" % (aligned_sequences_file, refpkg_output, rerooted2_tree, rerooted_log, base, taxtastic_tax, taxtastic_seq)
+    subprocess.check_call(["/bin/bash", "-c", command])
+    
+    
+    # Move houses
+    logging.info("Compiling GPKG")
+    gpkg_name = base + "_gpkg"
+    os.mkdir(gpkg_name)
+    shutil.move(options.hmm, gpkg_name)
+    shutil.move(refpkg_output, gpkg_name)
+    
+    logging.info("Finished")
 
-with open(taxtastic_seq, 'w') as f:
-    for entry in new_seq:
-        f.write("%s\n" % entry)
-         
-logging.info("Included %s sequences in the alignment" % (sequence_number))
-if sequence_number == 0: raise Exception("No matching sequences detected, cannot create tree")
-if sequence_number < 4: logging.warn("Too few sequences detected (%s)!!!!, the output is unlikely to be informative" % sequence_number)
+def blast_workflow(options):
+    """Infer gene tree using blast workflow."""
+
+    options.greengenes = '/srv/whitlam/bio/db/gtdb/gtdb.greengenes'
+
+    logging.info('Reading metadata information from ARB GreenGenes file.')
+    arb_parser = ArbParser()
+    metadata = arb_parser.read(options.greengenes, public=False)
+    logging.info("  Found records for %s genomes." % len(metadata))
+
+    blast_workflow = BlastWorkflow(options.output_dir)
+    blast_workflow.run(options.query_proteins,
+                       options.evalue,
+                       options.per_identity,
+                       options.per_aln_len,
+                       metadata,
+                       options.cpus)
+
+    sys.exit(0)  # break free from HMM workflow [SUPER HACKY]
 
 
-# Make a tree, saving the log information
-logging.info("Creating phylogenetic tree..")
-fasttree_output = os.path.join(dump_directory, 'fasttree.tree')
-fasttree_log_file = os.path.join(dump_directory, 'fasttree.log')
-subprocess.check_call(["bash", "-c", "FastTreeMP -log %s %s > %s" % (fasttree_log_file, aligned_sequences_file, fasttree_output)])
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(add_help=False)
+    subparsers = parser.add_subparsers(help="--", dest='subparser_name')
 
-# Reroot the tree
-logging.info("Rerooting phylogenetic tree..")
-rerooted_tree = os.path.join(dump_directory, 'rerooted.tree')
-Rerooter().main(fasttree_output, rerooted_tree, options.nodes)
+    # options for inferring a gene tree using a HMM
+    # greengenes file from genome tree database => provides taxonomy
+    # HMM => the HMM to search with
+    # path to proteome files - one for each genome => sequences to be put into the tree
+    default_evalue = 1e-20
 
-## TODO - remake log files 
-logging.info("Creating log file for rerooted tree..")
-rerooted_log = os.path.join(dump_directory, 'rerooted.log')
-rerooted2_tree = os.path.join(dump_directory, 'rerooted2.tree')
-cmd = "FastTreeMP -nome -mllen -intree %s -log %s %s > %s" % (rerooted_tree, rerooted_log, aligned_sequences_file, rerooted2_tree)
-subprocess.check_call(["bash", "-c", cmd])
+    hmm_parser = subparsers.add_parser('hmm',
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Infer gene tree using a HMM.')
 
-# Create the final reference package
-logging.info("Creating reference package by taxit create")
-base = os.path.basename(options.hmm).split('.')[0]
-refpkg_output = '%s.refpkg' % (base)
-command = "taxit create -f %s -P %s -t %s -s %s -c -l %s -T %s -i %s --no-reroot" % (aligned_sequences_file, refpkg_output, rerooted2_tree, rerooted_log, base, taxtastic_tax, taxtastic_seq)
-subprocess.check_call(["/bin/bash", "-c", command])
+    hmm_parser.add_argument('--hmm', help='Hidden Markov model to search with', required=True)
+    hmm_parser.add_argument('--greengenes', help='GreenGenes file with metadata for genomes', required=True)
+    hmm_parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
+    hmm_parser.add_argument('--output_dir', help='store files in this folder', required=True)
+    hmm_parser.add_argument('--nodes', help='node names to re-root with', default=None, required=True)
+    hmm_parser.add_argument('--evalue', help='evalue cutoff for identifying homologs', type=float, default=default_evalue)
+    hmm_parser.add_argument('--cpus', type=int, help='number of CPUs to use throughout the process', default=1)
+    hmm_parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public', default=False)
 
+    # options for inferring a gene tree using blast
+    blast_parser = subparsers.add_parser('blast',
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Infer gene tree using BLAST.')
 
-# Move houses
-logging.info("Compiling GPKG")
-gpkg_name = base + "_gpkg"
-os.mkdir(gpkg_name)
-shutil.move(options.hmm, gpkg_name)
-shutil.move(refpkg_output, gpkg_name)
+    blast_parser.add_argument('-q', '--query_proteins', help='protein sequences for identifying homologs (fasta format)', required=True)
+    blast_parser.add_argument('-o', '--output_dir', help='store files in this folder', required=True)
+    blast_parser.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs', type=float, default=1e-5)
+    blast_parser.add_argument('-p', '--per_identity', help="percent identity for identifying homologs", type=float, default=30.0)
+    blast_parser.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs", type=float, default=50.0)
+    blast_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
+    # blast_parser.add_argument('--public', action="store_true", help='Only search proteomes with core_list_status set to public', default=False)
 
+    # infer tree over a reduced set of genes
+    reduce_parser = subparsers.add_parser('reduce',
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Infer tree for reduced set of genes.')
 
-logging.info("Finished")
+    reduce_parser.add_argument('-m', '--msa_file', help='multiple sequence alignment used to infer tree (fasta format)', required=True)
+    reduce_parser.add_argument('-g', '--gene_ids', help='gene ids to retain in tree (one id per line)', required=True)
+    reduce_parser.add_argument('-o', '--output_tree', help='output tree with bootstrap values', required=True)
+    reduce_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
+
+    # calculate bootstrap support
+    bootstrap_parser = subparsers.add_parser('bootstrap',
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Calculate bootstrap support for tree.')
+
+    bootstrap_parser.add_argument('-t', '--tree', help='tree requiring bootstrap support values', required=True)
+    bootstrap_parser.add_argument('-m', '--msa_file', help='multiple sequence alignment used to infer tree (fasta format)', required=True)
+    bootstrap_parser.add_argument('-o', '--output_tree', help='output tree with bootstrap values', required=True)
+    bootstrap_parser.add_argument('-r', '--num_replicates', help='number of bootstrap replicates to perform', type=int, default=100)
+    bootstrap_parser.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
+
+    # get and check options
+    options = None
+    if(len(sys.argv) == 1 or sys.argv[1] == '-h' or sys.argv == '--help'):
+        printHelp()
+        sys.exit(0)
+    else:
+        options = parser.parse_args()
+
+    if options.subparser_name == 'reduce':
+        reduce = Reduce()
+        reduce.run(options.msa_file, options.gene_ids, options.output_tree, options.cpus)
+        sys.exit(0)
+    elif options.subparser_name == 'bootstrap':
+        bootstrap = Bootstrap()
+        bootstrap.run(options.tree, options.msa_file, options.output_tree, options.num_replicates, options.cpus)
+        sys.exit(0)
+
+    # create output directory
+    if os.path.exists(options.output_dir):
+        raise Exception("Output folder %s already exists, cowardly refusing to proceed" % options.output_dir)
+    os.mkdir(options.output_dir)
+
+    if options.subparser_name == "hmm":
+        hmm_workflow(options)
+    elif options.subparser_name == 'blast':
+        blast_workflow(options)

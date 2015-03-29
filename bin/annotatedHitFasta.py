@@ -1,5 +1,30 @@
 #!/usr/bin/env python
 
+###############################################################################
+#                                                                             #
+#    This program is free software: you can redistribute it and/or modify     #
+#    it under the terms of the GNU General Public License as published by     #
+#    the Free Software Foundation, either version 3 of the License, or        #
+#    (at your option) any later version.                                      #
+#                                                                             #
+#    This program is distributed in the hope that it will be useful,          #
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of           #
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the            #
+#    GNU General Public License for more details.                             #
+#                                                                             #
+#    You should have received a copy of the GNU General Public License        #
+#    along with this program. If not, see <http://www.gnu.org/licenses/>.     #
+#                                                                             #
+###############################################################################
+
+__author__ = "Ben Woodcroft"
+__copyright__ = "Copyright 2015"
+__credits__ = ["Ben Woodcroft"]
+__license__ = "GPL3"
+__maintainer__ = "Ben Woodcroft"
+__email__ = ""
+__status__ = "Development"
+
 import argparse
 import logging
 import sys
@@ -10,7 +35,7 @@ from Bio import SeqIO
 from subprocess import Popen, PIPE, STDOUT
 import StringIO
 
-sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),'..','lib'))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', 'lib'))
 from phil_format_database_parser import PhilFormatDatabaseParser
 from taxonomy_string import TaxonomyString
 
@@ -20,10 +45,10 @@ from taxonomy_string import TaxonomyString
 # HMM => the HMM to create a reference package out of
 # path to proteome files - one for each genome => sequences to be put into the reference package
 parser = argparse.ArgumentParser(description='''Creates a fasta file of each HMM's hit, where each is hit is annotated by its taxonomy''')
-parser.add_argument('--aligned_fasta', help = 'aligned file output from createReference.py', required = True)
-parser.add_argument('--greengenes', help = '.greengenes file to define taxonomy', required = True)
-parser.add_argument('--proteomes_list_file', help = 'path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required = True)
-parser.add_argument('--hit_fasta_file', help = 'output taxonomy-annotated, unaligned FASTA file of hits to this file', required = True)
+parser.add_argument('--aligned_fasta', help='aligned file output from createReference.py', required=True)
+parser.add_argument('--greengenes', help='.greengenes file to define taxonomy', required=True)
+parser.add_argument('--proteomes_list_file', help='path to file containing faa files of each genome\'s proteome (of the form [path]<ace_ID>[stuff].faa e.g. /srv/home/ben/A00000001.fna.faa', required=True)
+parser.add_argument('--hit_fasta_file', help='output taxonomy-annotated, unaligned FASTA file of hits to this file', required=True)
 
 options = parser.parse_args()
 
@@ -48,7 +73,7 @@ with open(options.proteomes_list_file) as f:
   for pro in f:
     pro = pro.strip()
 
-    ace_id = re.match(r'^([A-Z]\d+)',os.path.basename(pro)).group(1)
+    ace_id = re.match(r'^([A-Z]\d+)', os.path.basename(pro)).group(1)
     ace_id_to_proteome_file[ace_id] = pro
 if len(ace_id_to_proteome_file) < 1: raise Exception("Error: no proteome files found, cannot continue")
 logging.info("Read in %s proteome files for processing e.g. %s => %s" % (len(ace_id_to_proteome_file), ace_id_to_proteome_file.keys()[0], ace_id_to_proteome_file[ace_id_to_proteome_file.keys()[0]]))
@@ -70,7 +95,7 @@ def extract_and_output(ace_id, ace_id_to_taxonomy, ace_id_to_proteome_file, curr
   stdout = pr.communicate(input=std)[0]
 
   num_written = 0
-  #import code; code.interact(local=locals())
+  # import code; code.interact(local=locals())
   for record in SeqIO.parse(StringIO.StringIO(stdout), 'fasta'):
     output_fh.write('>%s_%s %s\n' % (ace_id, record.id, taxonomy))
     output_fh.write('%s\n' % record.seq)
@@ -86,7 +111,7 @@ def extract_and_output(ace_id, ace_id_to_taxonomy, ace_id_to_proteome_file, curr
 
 
 # Read aligned fasta file one line at a time,
-with open(options.hit_fasta_file,'w') as output_fh:
+with open(options.hit_fasta_file, 'w') as output_fh:
   with open(options.aligned_fasta) as f:
     current_ace_id = None
     current_protein_ids = []
