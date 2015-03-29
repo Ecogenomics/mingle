@@ -161,7 +161,7 @@ def hmm_workflow(options):
     for entry in ArbParser().each(open(options.greengenes)):
         ace_id = entry['db_name']
         if options.public:
-            if entry['core_list_status'] == 'public':
+            if entry['core_list_status'] == 'public'or entry['prokMSA_id'][0] == 'A':
                 ids_used.append(entry['db_name'])
                 try:
                     taxonomy = entry['genome_tree_tax_string']
