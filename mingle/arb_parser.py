@@ -162,7 +162,7 @@ class ArbParser:
                 io.write('\n')
 
             io.write('BEGIN\n')
-            for key in dahash:
+            for key in sorted(dahash.keys()):
                 if key != 'warning' and key != 'aligned_seq':
                     io.write('='.join([key, dahash[key]]) + '\n')
 
