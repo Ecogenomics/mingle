@@ -28,165 +28,242 @@ import sys
 import logging
 from collections import defaultdict
 
-from mingle.blast import BlastRunner, BlastParser
-from mingle.muscle import MuscleRunner
-from mingle.fasttree import FastTreeRunner
+import biolib.seq_io as seq_io
+import biolib.seq_tk as seq_tk
+from biolib.common import concatenate_files
+from biolib.taxonomy import Taxonomy
+from biolib.external.blast import Blast
+from biolib.external.muscle import Muscle
+from biolib.external.fasttree import FastTree
+from biolib.external.execute import check_dependencies
+
 from mingle.arb_parser import ArbParser
-from mingle.seq_io import SeqIO
 
 
 class BlastWorkflow():
     """Blast-based workflow for building a gene tree."""
 
-    def __init__(self, output_dir):
-        """Initialization."""
-
-        self.logger = logging.getLogger()
-
-        self.protein_seqs = '/srv/whitlam/bio/db/gtdb/prodigal/gtdb.genes.faa'
-        self.protein_blast_db = '/srv/whitlam/bio/db/gtdb/blast/prot/gtdb.genes.faa'
-
-        self.nucleotide_seqs = '/srv/whitlam/bio/db/gtdb/prodigal/gtdb.genes.fna'
-        self.nucleotide_blast_db = '/srv/whitlam/bio/db/gtdb/blast/prot/gtdb.genes.fna'
-
-        self.blast_output = os.path.join(output_dir, "blast_out.tsv")
-
-        self.arb_greengenes_db = os.path.join(output_dir, 'gene_tree.greengenes')
-
-        self.homolog_output = os.path.join(output_dir, "homologs.faa")
-        self.msa_output = os.path.join(output_dir, "homologs.aligned.faa")
-        self.msa_log = os.path.join(output_dir, "homologs.aligned.log")
-
-        self.tree_output = os.path.join(output_dir, "gene_tree.tree")
-        self.tree_log = os.path.join(output_dir, "gene_tree.log")
-        self.tree_output_log = os.path.join(output_dir, "gene_tree.out")
-
-    def modify_greengene_hashes(self, metadata, seqs):
-        """Extract and modify GreenGene hashes for homologous genes.
-
-        Provides sensible names for homologous genes which make the
-        source genome clear and handles instances where a genome
-        contains multiple homologous genes. A list of dictionaries
-        describing genome metadata for each homologous genes is
-        produced along with a corresponding dictionary of the renamed
-        homologous sequences.
+    def __init__(self, cpus):
+        """Initialization.
 
         Parameters
         ----------
-        metadata : dict[genome_id] -> metadata dictionary
-            Metadata for genomes.
-        seqs: dict[seq_id] -> seq
-            Homologous sequences indexed by sequence id.
-
-        Returns
-        -------
-        list of dict
-           Metadata for each homologous gene.
-        dict
-            Homologous sequences indexed with new sequence ids.
-        """
-
-        metadata_for_homologs = []
-        genes_in_genome = defaultdict(int)
-        new_seqs = {}
-        for seq_id, seq in seqs.iteritems():
-            # get has for genome
-            genome_id = seq_id.split('_')[0]
-
-            # create hash for gene
-            new_genome_id = genome_id
-
-            count = genes_in_genome[genome_id]
-            if count != 0:
-                new_genome_id += '_' + str(count + 1)
-
-            try:
-                new_hash = metadata[genome_id].copy()
-            except:
-                self.logger.warning('Missing metadata information for genome: %s' % genome_id)
-                new_hash = {}
-
-            new_hash['db_name'] = new_genome_id
-            new_hash['prokMSA_id'] = new_genome_id
-            new_hash['name'] = new_genome_id
-            new_hash['acc'] = seq_id
-            new_hash['ACE_genome_id'] = genome_id
-            new_hash['gene_id'] = seq_id[seq_id.find('_') + 1:]
-            new_hash['gene_annotation'] = ''
-
-            metadata_for_homologs.append(new_hash)
-
-            genes_in_genome[genome_id] += 1
-
-            # save sequence with new name
-            new_seqs[new_genome_id] = seq
-
-        return metadata_for_homologs, new_seqs
-
-    def run(self, query_seqs, evalue, per_identity, per_aln_len, metadata, cpus):
-        """Infer a gene tree for homologous genes identified by blast.
-
-        Complete workflow for inferring a gene tree from homologous sequences
-        to a set of query sequences. Homologous sequences are identified by blast
-        search and a set of user-defined parameters.
-
-        Parameters
-        ----------
-        query_seqs : str
-            Fasta file containing query sequences.
-        evalue : float
-            E-value threshold used to define homologous gene.
-        per_identity : float
-            Percent identity threshold used to define a homologous gene.
-        per_aln_len : float
-            Alignment length threshold used to define a homologous gene.
-        metadata : dict[genome_id] -> metadata dictionary
-            Metadata for genomes.
         cpus : int
             Number of cpus to use during homology search.
         """
 
-        if not os.path.exists(query_seqs):
-            self.logger.error('Missing query sequences file: %s' % query_seqs)
+        check_dependencies(['muscle', 'FastTreeMP', 'blastp', 't2t'])
+
+        self.logger = logging.getLogger()
+
+        self.cpus = cpus
+
+    def extract_homologs(self, homologs, db_file, output_file):
+        """Extract homologs sequences from database file.
+
+        Parameters
+        ----------
+        homologs : iterable
+            Unique identifiers of sequences to extract
+        db_file : str
+            Fasta file with sequences.
+        output_file : str
+            File to write homologs.
+        """
+
+        if type(homologs) is not set:
+            homologs = set(homologs)
+
+        fout = open(output_file, 'w')
+        for seq_id, seq, annotation in seq_io.read_fasta_seq(db_file, keep_annotation=True):
+            if seq_id in homologs:
+                fout.write('>' + seq_id + ' ' + annotation + '\n')
+                fout.write(seq + '\n')
+        fout.close()
+
+    def create_arb_metadata(self, homologs, msa_output, taxonomy, output_file):
+        """Create metadata file suitable for import into ARB.
+
+        Parameters
+        ----------
+        homologs : d[seq_id] -> namedtuple of BlastHit information
+            BLAST results for identified homologs.
+        msa_output : str
+            Fasta file with aligned homologs.
+        taxonomy : d[genome_id] -> list of taxa
+            Taxonomic information for genomes.
+        output_file : str
+            File to write metadata information.
+        """
+
+        arb_metadata_list = []
+        for seq_id, seq, annotation in seq_io.read_seq(msa_output, keep_annotation=True):
+            if '~' in seq_id:
+                scaffold_gene_id = seq_id[:seq_id.find('~')]
+                genome_id = seq_id[seq_id.find('~') + 1:].split()[0]
+            else:
+                scaffold_gene_id = seq_id
+                genome_id = ''
+
+            arb_metadata = {}
+            arb_metadata['db_name'] = seq_id
+            arb_metadata['img_genome_id'] = genome_id
+            arb_metadata['img_scaffold_id'] = scaffold_gene_id[0:scaffold_gene_id.rfind('_')]
+            arb_metadata['img_scaffold_gene_id'] = scaffold_gene_id
+            arb_metadata['img_tax_string'] = ';'.join(taxonomy.get(genome_id, ''))
+            arb_metadata['aligned_seq'] = seq
+
+            hit_info = homologs.get(seq_id, None)
+            if hit_info:
+                arb_metadata['blast_evalue'] = '%.1g' % hit_info.evalue
+                arb_metadata['blast_bitscore'] = '%.1f' % hit_info.bitscore
+                arb_metadata['blast_perc_identity'] = '%.1f' % hit_info.perc_identity
+                arb_metadata['blast_subject_perc_alignment_len'] = '%.1f' % hit_info.subject_perc_aln_len
+                arb_metadata['blast_query_perc_alignment_len'] = '%.1f' % hit_info.query_perc_aln_len
+                arb_metadata['blast_query_id'] = hit_info.query_id
+
+            if annotation:
+                annotation_split = annotation.split('[')
+                if len(annotation_split) == 3:
+                    # assume format is <annotation> [<genome name>] [<IMG gene id>]
+                    gene_annotation, organism_name, gene_id = annotation_split
+                    organism_name = organism_name.replace(']', '')
+                    gene_id = gene_id.replace(']', '').replace('IMG Gene ID: ', '')
+                elif len(annotation_split) == 2:
+                    # format is essentially unknown, but the most likely issue
+                    # is that the gene itself just doesn't have an annotation
+                    gene_annotation = ''
+                    organism_name, gene_id = annotation_split
+                    organism_name = organism_name.replace(']', '')
+                    gene_id = gene_id.replace(']', '').replace('IMG Gene ID: ', '')
+                else:
+                    # no idea what the format is, so just save the annotation
+                    gene_annotation = annotation
+                    organism_name = ''
+                    gene_id = ''
+
+                arb_metadata['img_gene_annotation'] = gene_annotation
+                arb_metadata['organism'] = organism_name
+                arb_metadata['full_name'] = organism_name
+                arb_metadata['img_gene_id'] = gene_id
+
+            arb_metadata_list.append(arb_metadata)
+
+        fout = open(output_file, 'w')
+        arb_parser = ArbParser()
+        arb_parser.write(arb_metadata_list, fout)
+        fout.close()
+
+    def run(self, query_proteins,
+            db_file, taxonomy_file,
+            evalue, per_identity, per_aln_len, max_matches, blast_mode,
+            min_per_taxa, min_per_bp,
+            output_dir):
+        """Infer a gene tree for homologs genes identified by blast.
+
+        Workflow for inferring a gene tree from sequences identified as being
+        homologs to a set of query proteins. Homologs are identified using BLASTP
+        and a set of user-defined parameters.
+
+        Parameters
+        ----------
+        query_proteins : str
+            Fasta file containing query proteins.
+        db_file : str
+            BLAST database of reference proteins.
+        taxonomy_file : str
+            Taxonomic assignment of each reference genomes.
+        evalue : float
+            E-value threshold used to define homolog.
+        per_identity : float
+            Percent identity threshold used to define a homolog.
+        per_aln_len : float
+            Alignment length threshold used to define a homolog.
+        max_matches : int
+            Maximum matches per query protein.
+        metadata : dict[genome_id] -> metadata dictionary
+            Metadata for genomes.
+        blast_mode : str
+            Type of blast to perform.
+        min_per_taxa : float
+            Minimum percentage of taxa required to retain a leading and trailing columns.
+        min_per_bp : float
+            Minimum percentage of base pairs required to keep trimmed sequence.
+        output_dir : str
+            Directory to store results.
+        """
+
+        if not os.path.exists(query_proteins):
+            self.logger.error('Missing query file: %s' % query_proteins)
             sys.exit()
 
-        seq_io = SeqIO()
+        if not os.path.exists(taxonomy_file):
+            self.logger.error('Missing taxonomy file: %s' % taxonomy_file)
+            sys.exit()
 
-        # identify homologous genes using blast
-        self.logger.info('Identifying homologous genes using BLAST.')
-        br = BlastRunner()
-        br.blastp(query_seqs, self.protein_blast_db, evalue, cpus, self.blast_output)
+        if not os.path.exists(db_file):
+            self.logger.error('Missing database file: %s' % db_file)
+            sys.exit()
 
-        bp = BlastParser()
-        homologs = bp.identify_homologs(self.blast_output, evalue, per_identity, per_aln_len)
-        self.logger.info('  Identified %d homologous genes.' % len(homologs))
+        # read taxonomy file
+        self.logger.info('Reading taxonomy file.')
+        taxonomy = Taxonomy().read(taxonomy_file)
 
-        # extract homologous sequences
-        self.logger.info('Extracting homologous sequences.')
-        seqs = seq_io.extract_seqs(self.protein_seqs, homologs)
+        # identify homologs using BLASTP
+        self.logger.info('Identifying homologs using %s.' % blast_mode)
+        blast = Blast(self.cpus)
+        blast_output = os.path.join(output_dir, 'blastp.hits.tsv')
+        blast.blastp(query_proteins, db_file, blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
+        homologs = blast.identify_homologs(blast_output, evalue, per_identity, per_aln_len, output_fmt='custom')
+        self.logger.info('Identified %d homologs.' % len(homologs))
 
-        # create GreenGenes style file for ARB
-        self.logger.info('Creating GreenGenes-style file for ARB.')
-        metadata_for_homologs, new_seqs = self.modify_greengene_hashes(metadata, seqs)
-        seq_io.write_fasta(new_seqs, self.homolog_output)
+        # extract homologs
+        self.logger.info('Extracting homologs.')
+        db_homologs_tmp = os.path.join(output_dir, 'homologs_db.tmp')
+        self.extract_homologs(homologs.keys(), db_file, db_homologs_tmp)
+        homolog_ouput = os.path.join(output_dir, 'homologs.faa')
+        concatenate_files([query_proteins, db_homologs_tmp], homolog_ouput)
+        os.remove(db_homologs_tmp)
 
         # infer multiple sequence alignment
         self.logger.info('Inferring multiple sequence alignment.')
-        mr = MuscleRunner()
-        mr.run(self.homolog_output, self.msa_output, self.msa_log)
-        aligned_seqs = seq_io.read_fasta(self.msa_output)
+        muscle = Muscle()
+        msa_output = os.path.join(output_dir, 'homologs.aligned.faa')
+        msa_log = os.path.join(output_dir, 'muscle.log')
+        muscle.run(homolog_ouput, msa_output, msa_log)
 
-        # finish constructing out GreenGenes style ARB file
-        for metadata in metadata_for_homologs:
-            gene_id = metadata['db_name']
-            metadata['aligned_seq'] = aligned_seqs[gene_id]
-
-        f = open(self.arb_greengenes_db, 'w')
-        arb_parser = ArbParser()
-        arb_parser.write(metadata_for_homologs, f)
-        f.close()
+        # trim multiple sequence alignment
+        self.logger.info('Trimming leading and trailing columns of alignment.')
+        seqs = seq_io.read_fasta(msa_output, keep_annotation=True)
+        trimmed_seqs, pruned_seqs = seq_tk.trim_seqs(seqs, min_per_taxa / 100.0, min_per_bp / 100.0)
+        trimmed_msa_output = os.path.join(output_dir, 'homologs.trimmed.aligned.faa')
+        seq_io.write_fasta(trimmed_seqs, trimmed_msa_output)
+        self.logger.info('Trimming sequences from %d bp to %d bp.' % (len(seqs.values()[0]), len(trimmed_seqs.values()[0])))
+        self.logger.info('%d of %d taxa were deemed to be too short and removed.' % (len(pruned_seqs), len(seqs)))
+        os.remove(msa_output)
 
         # infer tree
         self.logger.info('Inferring gene tree.')
-        ft = FastTreeRunner(multithreaded=(cpus > 1))
-        ft.run(self.msa_output, 'wag', self.tree_output, self.tree_log, self.tree_output_log)
+        fasttree = FastTree(multithreaded=(self.cpus > 1))
+
+        tree_output = os.path.join(output_dir, 'homologs.tree')
+        tree_log = os.path.join(output_dir, 'homologs.tree.log')
+        tree_output_log = os.path.join(output_dir, 'fasttree.log')
+        fasttree.run(trimmed_msa_output, 'prot', 'wag', tree_output, tree_log, tree_output_log)
+
+        # create tax2tree consensus map and decorate tree
+        self.logger.info('Decorating internal tree nodes with tax2tree.')
+        output_taxonomy_file = os.path.join(output_dir, 'taxonomy.tsv')
+        fout = open(output_taxonomy_file, 'w')
+        for homolog_id in homologs.keys():
+            genome_id = homolog_id[homolog_id.find('~') + 1:].split()[0]
+            fout.write(homolog_id + '\t' + ';'.join(taxonomy[genome_id]) + '\n')
+        fout.close()
+
+        t2t_tree = os.path.join(output_dir, 'homologs.tax2tree.tree')
+        os.system('t2t decorate -m %s -t %s -o %s' % (output_taxonomy_file, tree_output, t2t_tree))
+
+        # create ARB metadata file
+        self.logger.info('Creating ARB metadata file.')
+        arb_metadata_file = os.path.join(output_dir, 'arb.metadata.txt')
+        self.create_arb_metadata(homologs, trimmed_msa_output, taxonomy, arb_metadata_file)

@@ -23,48 +23,28 @@ __maintainer__ = "Donovan Parks"
 __email__ = "donovan.parks@gmail.com"
 __status__ = "Development"
 
-import os
 import logging
-import random
-import tempfile
-import shutil
 
-from mingle.seq_io import SeqIO
+from biolib.external.fasttree import FastTree
 
 
 class Bootstrap():
     """Calculate bootstrap support."""
 
-    def __init__(self):
-        """Initialization."""
-        self.logger = logging.getLogger()
-
-    def bootstrap(self, seqs, output_file):
-        """Bootstrap multiple sequence alignment.
-
-        Perform random sampling with replacement of
-        columns within a multiple sequence alignment.
+    def __init__(self, cpus):
+        """Initialization.
 
         Parameters
         ----------
-        seqs : dict[seq_id] -> seq
-            Sequences indexed by sequence id.
-        output_file : str
-            Name of file to write bootstrapped sequence alignment.
+        cpus : int
+            Number of cpus to use.
         """
-        alignment_len = len(seqs[seqs.keys()[0]])
-        cols = [random.randint(0, alignment_len - 1) for _ in xrange(alignment_len)]
 
-        fout = open(output_file, 'w')
-        for seqId, seq in seqs.iteritems():
-            fout.write('>' + seqId + '\n')
-            for col in cols:
-                fout.write(seq[col])
-            fout.write('\n')
+        self.logger = logging.getLogger()
 
-        fout.close()
+        self.cpus = cpus
 
-    def run(self, input_tree, msa_file, output_tree, num_replicates, cpus):
+    def run(self, input_tree, msa_file, output_tree, num_replicates):
         """Calculate bootstraps.
 
         Calculate support for tree using  the non-parametric
@@ -84,42 +64,11 @@ class Bootstrap():
             Number of cpus to use.
         """
 
-        seq_io = SeqIO()
-        seqs = seq_io.read_fasta(msa_file)
-
-        # create bootstrap trees
-        self.logger.info('Creating bootstrap alignments.')
-        tmp_dir = tempfile.mkdtemp()
-        tree_list_file = os.path.join(tmp_dir, 'bootstrap_trees.txt')
-        tree_list_out = open(tree_list_file, 'w')
-
-        bootstrap_tree_files = []
-        for i in xrange(0, num_replicates):
-            bootstrap_tree_file = os.path.join(tmp_dir, 'bootstrap_tree.' + str(i) + '.tre')
-            bootstrap_tree_files.append(bootstrap_tree_file)
-
-            aln_file = os.path.join(tmp_dir, 'bootstrap_aln.' + str(i) + '.faa')
-            self.bootstrap(seqs, aln_file)
-
-            cmd = 'FastTree -quiet -nosupport -wag %s > %s 2> /dev/null\n' % (aln_file, bootstrap_tree_file)
-            tree_list_out.write(cmd)
-
-        tree_list_out.close()
-
-        self.logger.info('Inferring bootstrap trees.')
-        os.system('cat ' + tree_list_file + ' | parallel --max-procs ' + str(cpus))
-
-        # create single file with bootstrap trees
-        bootstrap_file = os.path.join(tmp_dir, 'bootstrap_trees.tre')
-        bootstrap_out = open(bootstrap_file, 'w')
-        for tree in bootstrap_tree_files:
-            for line in open(tree):
-                bootstrap_out.write(line)
-        bootstrap_out.close()
-
-        # determine bootstrap support for original tree
-        self.logger.info('Determining bootstrap support for original tree.')
-        os.system('CompareToBootstrap.pl -tree ' + input_tree + ' -boot ' + bootstrap_file + ' > ' + output_tree)
-
-        # clean up temporary files
-        shutil.rmtree(tmp_dir)
+        self.logger.info('Calculating bootstrap support values.')
+        ft = FastTree(multithreaded=False)
+        ft.bootstrap(input_tree,
+                     msa_file,
+                     'prot', 'wag',
+                     num_replicates,
+                     output_tree,
+                     self.cpus)

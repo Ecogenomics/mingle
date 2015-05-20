@@ -27,16 +27,26 @@ import os
 import sys
 import logging
 
-from mingle.fasttree import FastTreeRunner
-from mingle.seq_io import SeqIO
+from biolib.external.fasttree import FastTree
+
+import biolib.seq_io as seq_io
 
 
 class Reduce():
     """Workflow for inferring a tree over a reduced set of genes."""
 
-    def __init__(self):
-        """Initialization."""
+    def __init__(self, cpus):
+        """Initialization.
+
+        Parameters
+        ----------
+        cpus : int
+            Number of cpus to use during homology search.
+        """
+
         self.logger = logging.getLogger()
+
+        self.cpus = cpus
 
     def read_ids(self, gene_id_file):
         """Read gene id file.
@@ -61,7 +71,7 @@ class Reduce():
 
         return genes_to_retain
 
-    def run(self, msa_file, gene_id_file, output_tree, cpus):
+    def run(self, msa_file, gene_id_file, taxonomy_file, output_tree):
         """Infer a tree over a reduced set of genes.
 
         Filter an existing multiple sequence alignment to
@@ -74,10 +84,10 @@ class Reduce():
             Fasta file containing multiple sequence alignment.
         gene_ids : str
             File with gene ids to retain in tree.
+        taxonomy_file : str
+            Taxonomic assignment of each reference genomes.
         output_tree: str
             Output file containing reduced tree.
-        cpus : int
-            Number of cpus to use during homology search.
         """
 
         if not os.path.exists(msa_file):
@@ -88,13 +98,15 @@ class Reduce():
             self.logger.error('Missing gene id file: %s' % gene_id_file)
             sys.exit()
 
+        if not os.path.exists(taxonomy_file):
+            self.logger.error('Missing taxonomy file: %s' % taxonomy_file)
+            sys.exit()
+
         # generate msa with reduced sequences
         self.logger.info('Extracting sequences to retain.')
         genes_to_retain = self.read_ids(gene_id_file)
 
-        seq_io = SeqIO()
         seqs = seq_io.read_fasta(msa_file)
-
         reduced_seqs = {}
         for seq_id, seq in seqs.iteritems():
             if seq_id in genes_to_retain:
@@ -104,10 +116,15 @@ class Reduce():
         reduced_msa_file += '.reduced.' + msa_file[msa_file.rfind('.') + 1:]
         seq_io.write_fasta(reduced_seqs, reduced_msa_file)
 
-        self.logger.info('  Retained %d sequences.' % len(reduced_seqs))
+        self.logger.info('Retained %d sequences.' % len(reduced_seqs))
 
         # infer tree
         self.logger.info('Inferring gene tree.')
-        ft = FastTreeRunner(multithreaded=(cpus > 1))
+        fasttree = FastTree(multithreaded=(self.cpus > 1))
         tree_log = output_tree + '.log'
-        ft.run(reduced_msa_file, 'wag', output_tree, tree_log)
+        fasttree.run(reduced_msa_file, 'prot', 'wag', output_tree, tree_log)
+
+        # create tax2tree consensus map and decorate tree
+        self.logger.info('Decorating internal tree nodes with tax2tree.')
+        t2t_tree = output_tree + '.tax2tree.tree'
+        os.system('t2t decorate -m %s -t %s -o %s' % (taxonomy_file, output_tree, t2t_tree))
