@@ -26,7 +26,6 @@ __status__ = "Development"
 import os
 import sys
 import logging
-from collections import defaultdict
 
 import biolib.seq_io as seq_io
 import biolib.seq_tk as seq_tk
@@ -34,6 +33,7 @@ from biolib.common import concatenate_files
 from biolib.taxonomy import Taxonomy
 from biolib.external.blast import Blast
 from biolib.external.muscle import Muscle
+from biolib.external.mafft import Mafft
 from biolib.external.fasttree import FastTree
 from biolib.external.execute import check_dependencies
 
@@ -157,7 +157,8 @@ class BlastWorkflow():
     def run(self, query_proteins,
             db_file, taxonomy_file,
             evalue, per_identity, per_aln_len, max_matches, blast_mode,
-            min_per_taxa, min_per_bp,
+            min_per_taxa, min_per_bp, restrict_taxon,
+            msa_program,
             output_dir):
         """Infer a gene tree for homologs genes identified by blast.
 
@@ -189,9 +190,15 @@ class BlastWorkflow():
             Minimum percentage of taxa required to retain a leading and trailing columns.
         min_per_bp : float
             Minimum percentage of base pairs required to keep trimmed sequence.
+        restrict_taxon : str
+            Restrict alignment to specific taxonomic group (e.g., k__Archaea).
+        msa_program : str
+            Program to use for multiple sequence alignment ['mafft', 'muscle'].
         output_dir : str
             Directory to store results.
         """
+
+        assert(msa_program in ['mafft', 'muscle'])
 
         if not os.path.exists(query_proteins):
             self.logger.error('Missing query file: %s' % query_proteins)
@@ -217,6 +224,22 @@ class BlastWorkflow():
         homologs = blast.identify_homologs(blast_output, evalue, per_identity, per_aln_len, output_fmt='custom')
         self.logger.info('Identified %d homologs.' % len(homologs))
 
+        # restrict homologs to specific taxonomic group
+        if restrict_taxon:
+            self.logger.info('Restricting homologs to %s.' % restrict_taxon)
+            restricted_homologs = {}
+            for query_id, hit in homologs.iteritems():
+                genome_id = hit.subject_id[hit.subject_id.rfind('~') + 1:]
+                if restrict_taxon in taxonomy[genome_id]:
+                    restricted_homologs[query_id] = hit
+
+            self.logger.info('%d of %d homologs are from the specified group.' % (len(restricted_homologs), len(homologs)))
+            homologs = restricted_homologs
+
+        if len(homologs) == 0:
+            self.logger.error('Too few homologs were identified. Gene tree cannot be inferred.')
+            sys.exit()
+
         # extract homologs
         self.logger.info('Extracting homologs.')
         db_homologs_tmp = os.path.join(output_dir, 'homologs_db.tmp')
@@ -226,20 +249,37 @@ class BlastWorkflow():
         os.remove(db_homologs_tmp)
 
         # infer multiple sequence alignment
-        self.logger.info('Inferring multiple sequence alignment.')
-        muscle = Muscle()
-        msa_output = os.path.join(output_dir, 'homologs.aligned.faa')
-        msa_log = os.path.join(output_dir, 'muscle.log')
-        muscle.run(homolog_ouput, msa_output, msa_log)
+        self.logger.info('Inferring multiple sequence alignment with %s.' % msa_program)
+
+        if msa_program == 'mafft':
+            mafft = Mafft(self.cpus)
+            msa_output = os.path.join(output_dir, 'homologs.aligned.faa')
+            msa_log = os.path.join(output_dir, 'mafft.log')
+            mafft.run(homolog_ouput, msa_output, msa_log)
+        elif msa_program == 'muscle':
+            muscle = Muscle()
+            msa_output = os.path.join(output_dir, 'homologs.aligned.faa')
+            msa_log = os.path.join(output_dir, 'muscle.log')
+            muscle.run(homolog_ouput, msa_output, msa_log)
 
         # trim multiple sequence alignment
-        self.logger.info('Trimming leading and trailing columns of alignment.')
+        self.logger.info('Trimming poorly represented columns from alignment.')
         seqs = seq_io.read_fasta(msa_output, keep_annotation=True)
         trimmed_seqs, pruned_seqs = seq_tk.trim_seqs(seqs, min_per_taxa / 100.0, min_per_bp / 100.0)
         trimmed_msa_output = os.path.join(output_dir, 'homologs.trimmed.aligned.faa')
         seq_io.write_fasta(trimmed_seqs, trimmed_msa_output)
-        self.logger.info('Trimming sequences from %d bp to %d bp.' % (len(seqs.values()[0]), len(trimmed_seqs.values()[0])))
         self.logger.info('%d of %d taxa were deemed to be too short and removed.' % (len(pruned_seqs), len(seqs)))
+
+        if len(pruned_seqs) > 0:
+            prune_seqs_out = os.path.join(output_dir, 'filtered_seqs.too_short.txt')
+            self.logger.info('Pruned sequences written to %s.' % prune_seqs_out)
+            seq_io.write_fasta(pruned_seqs, prune_seqs_out)
+
+        if len(pruned_seqs) == len(seqs):
+            self.logger.error('Too many sequences were pruned. Gene tree cannot be inferred.')
+            sys.exit()
+
+        self.logger.info('Trimming alignment from %d bp to %d bp.' % (len(seqs.values()[0]), len(trimmed_seqs.values()[0])))
         os.remove(msa_output)
 
         # infer tree

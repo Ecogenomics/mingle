@@ -389,6 +389,8 @@ def blast_workflow(options):
                        options.blast_mode,
                        options.min_per_taxa,
                        options.min_per_bp,
+                       options.restrict_taxon,
+                       options.msa_program,
                        options.output_dir)
 
     sys.exit(0)  # break free from HMM workflow [SUPER HACKY]
@@ -436,12 +438,14 @@ if __name__ == '__main__':
 
     optonal_args = blast_parser.add_argument_group('optional arguments')
     optonal_args.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs', type=float, default=1e-5)
-    optonal_args.add_argument('-p', '--per_identity', help="percent identity for identifying homologs", type=float, default=30.0)
+    optonal_args.add_argument('-p', '--per_identity', help="percent amino acid identity for identifying homologs", type=float, default=30.0)
     optonal_args.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs", type=float, default=50.0)
     optonal_args.add_argument('-m', '--max_matches', help="maximum number of matches per query protein", type=int, default=500)
     optonal_args.add_argument('--blast_mode', choices=['blastp', 'blastp-fast'], help="type of BLASTP to perform", default='blastp-fast')
-    optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required to keep leading and trailing columns', type=float, default=70.0)
+    optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required required to retain column', type=float, default=50.0)
     optonal_args.add_argument('--min_per_bp', help='minimum percentage of base pairs required to keep trimmed seqs', type=float, default=50.0)
+    optonal_args.add_argument('--restrict_taxon', help='restrict alignment to specific taxonomic group (e.g., d__Archaea)', default=None)
+    optonal_args.add_argument('--msa_program', choices=['mafft', 'muscle'], help="program to use for multiple sequence alignment", default='mafft')
     optonal_args.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
     optonal_args.add_argument('-h', '--help', action="help", help="show help message")
 
@@ -507,10 +511,7 @@ if __name__ == '__main__':
         sys.exit(0)
 
     # create output directory
-    if os.path.exists(options.output_dir):
-        logging.error("Output folder %s already exists, cowardly refusing to proceed" % options.output_dir)
-        sys.exit()
-    else:
+    if not os.path.exists(options.output_dir):
         os.mkdir(options.output_dir)
 
     # set file logging
