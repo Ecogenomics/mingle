@@ -31,6 +31,8 @@ from biolib.external.fasttree import FastTree
 
 import biolib.seq_io as seq_io
 
+import dendropy
+
 
 class Reduce():
     """Workflow for inferring a tree over a reduced set of genes."""
@@ -123,6 +125,12 @@ class Reduce():
         fasttree = FastTree(multithreaded=(self.cpus > 1))
         tree_log = output_tree + '.log'
         fasttree.run(reduced_msa_file, 'prot', 'wag', output_tree, tree_log)
+
+        # root tree at midpoint
+        self.logger.info('Rooting tree at midpoint.')
+        tree = dendropy.Tree.get_from_path(output_tree, schema='newick', as_rooted=False, preserve_underscores=True)
+        tree.reroot_at_midpoint()
+        tree.write_to_path(output_tree, schema='newick', suppress_rooting=True, unquoted_underscores=True)
 
         # create tax2tree consensus map and decorate tree
         self.logger.info('Decorating internal tree nodes with tax2tree.')

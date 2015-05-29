@@ -42,9 +42,9 @@ from mingle.bootstrap import Bootstrap
 
 def version():
     """Read program version from file."""
-    binDir = os.path.dirname(os.path.realpath(__file__))
-    versionFile = open(os.path.join(binDir, '..', 'mingle', 'VERSION'))
-    return versionFile.read().strip()
+    bin_dir = os.path.dirname(os.path.realpath(__file__))
+    version_file = open(os.path.join(bin_dir, '..', 'mingle', 'VERSION'))
+    return version_file.read().strip()
 
 
 def printHelp():
@@ -518,6 +518,9 @@ if __name__ == '__main__':
     file_logger = logging.FileHandler(os.path.join(options.output_dir, 'mingle.log'), 'w')
     file_logger.setFormatter(log_format)
     logger.addHandler(file_logger)
+
+    logger.info('Running mingle v%s' % version())
+    logger.info(' '.join(sys.argv))
 
     if options.subparser_name == "hmm":
         hmm_workflow(options)

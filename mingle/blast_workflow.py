@@ -26,6 +26,7 @@ __status__ = "Development"
 import os
 import sys
 import logging
+from collections import deque
 
 import biolib.seq_io as seq_io
 import biolib.seq_tk as seq_tk
@@ -38,6 +39,8 @@ from biolib.external.fasttree import FastTree
 from biolib.external.execute import check_dependencies
 
 from mingle.arb_parser import ArbParser
+
+import dendropy
 
 
 class BlastWorkflow():
@@ -58,8 +61,17 @@ class BlastWorkflow():
 
         self.cpus = cpus
 
-    def extract_homologs(self, homologs, db_file, output_file):
-        """Extract homologs sequences from database file.
+    def extract_homologs_and_context(self, homologs, db_file, output_file):
+        """Extract homologs sequences from database file, and local gene context.
+
+        This function extract sequences information for each
+        homolog and writes this to file for downstream processing.
+        In addition, it determines the local gene context for each
+        gene. Specifically, it saves the annotations for the
+        3 genes prior to and after a given gene.
+
+        This function assumes the database is sorted according
+        to the order genes are identified on each contig.
 
         Parameters
         ----------
@@ -69,19 +81,101 @@ class BlastWorkflow():
             Fasta file with sequences.
         output_file : str
             File to write homologs.
+
+        Returns
+        -------
+        dict
+            d[seq_id] -> list of annotations for pre-context genes
+        dict
+            d[seq_id] -> list of annotations for post-context genes
         """
 
         if type(homologs) is not set:
             homologs = set(homologs)
 
         fout = open(output_file, 'w')
+        gene_precontext = {}
+        gene_postcontext = {}
+        local_context = [('unknown_x~unknown', None)] * 3
+        post_context_counter = {}
         for seq_id, seq, annotation in seq_io.read_fasta_seq(db_file, keep_annotation=True):
             if seq_id in homologs:
                 fout.write('>' + seq_id + ' ' + annotation + '\n')
                 fout.write(seq + '\n')
+
+                gene_precontext[seq_id] = list(local_context)
+                post_context_counter[seq_id] = 3
+
+            # record 3 precontext genes
+            local_context[0] = local_context[1]
+            local_context[1] = local_context[2]
+            local_context[2] = (seq_id, annotation)
+
+            # record 3 postcontext genes
+            if len(post_context_counter):
+                key_to_remove = None
+                for seq_id, count in post_context_counter.iteritems():
+                    count -= 1
+                    if count == -1:
+                        gene_postcontext[seq_id] = list(local_context)
+                        key_to_remove = seq_id
+                    else:
+                        post_context_counter[seq_id] = count
+
+                if key_to_remove:
+                    post_context_counter.pop(key_to_remove)
+
         fout.close()
 
-    def create_arb_metadata(self, homologs, msa_output, taxonomy, output_file):
+        # filter gene context to contain only genes on the same scaffold
+        gene_precontext = self._filter_gene_context(gene_precontext)
+        gene_postcontext = self._filter_gene_context(gene_postcontext)
+
+        return gene_precontext, gene_postcontext
+
+    def _filter_gene_context(self, gene_context):
+        """Filter gene context to contain only genes on the same scaffold.
+
+        This function assumes sequence identifies have the following format:
+            <scaffold_id>_<gene number>~<genome_id> [organism name] [IMG gene id]
+
+        Parameters
+        ----------
+        gene_context : d[seq_id] -> [(seq_id, annotation), ..., (seq_id, annotation)]
+            Gene context.
+
+        Returns
+        -------
+        dict: d[seq_id] -> [annotation, ..., annotation]
+            Filtered to contain only annotations from the same scaffold.
+        """
+
+        filtered_gene_context = {}
+        for seq_id, context in gene_context.iteritems():
+            gene_id = seq_id.split('~')[0]
+            scaffold_id = gene_id[0:gene_id.rfind('_')]
+
+            filtered_context = []
+            for local_seq_id, annotation in context:
+                local_gene_id = local_seq_id.split('~')[0]
+                local_scaffold_id = local_gene_id[0:local_gene_id.rfind('_')]
+
+                # strip organism name and IMG gene id
+                annotation = annotation[0:annotation.rfind('[')]
+                annotation = annotation[0:annotation.rfind('[')].strip()
+
+                if scaffold_id == local_scaffold_id:
+                    filtered_context.append(annotation)
+
+            filtered_gene_context[seq_id] = filtered_context
+
+        return filtered_gene_context
+
+    def create_arb_metadata(self,
+                            homologs, msa_output, taxonomy,
+                            metadata,
+                            gene_precontext, gene_postcontext,
+                            output_file):
         """Create metadata file suitable for import into ARB.
 
         Parameters
@@ -92,6 +186,12 @@ class BlastWorkflow():
             Fasta file with aligned homologs.
         taxonomy : d[genome_id] -> list of taxa
             Taxonomic information for genomes.
+        metadata : d[key] - string
+            Additional metadata to write to ARB file.
+        gene_precontext : d[seq_id] -> list of annotations for pre-context genes
+            Annotation for genes preceding a gene.
+        gene_postcontext: d[seq_id] -> list of annotations for post-context genes
+            Annotation for genes following a gene.
         output_file : str
             File to write metadata information.
         """
@@ -112,6 +212,12 @@ class BlastWorkflow():
             arb_metadata['img_scaffold_gene_id'] = scaffold_gene_id
             arb_metadata['img_tax_string'] = ';'.join(taxonomy.get(genome_id, ''))
             arb_metadata['aligned_seq'] = seq
+
+            for k, v in metadata.iteritems():
+                arb_metadata[k] = v
+
+            arb_metadata['gene_precontext'] = ' -> '.join(gene_precontext.get(seq_id, []))
+            arb_metadata['gene_postcontext'] = ' <- '.join(gene_postcontext.get(seq_id, []))
 
             hit_info = homologs.get(seq_id, None)
             if hit_info:
@@ -187,7 +293,7 @@ class BlastWorkflow():
         blast_mode : str
             Type of blast to perform.
         min_per_taxa : float
-            Minimum percentage of taxa required to retain a leading and trailing columns.
+            Minimum percentage of taxa required to retain a column.
         min_per_bp : float
             Minimum percentage of base pairs required to keep trimmed sequence.
         restrict_taxon : str
@@ -241,9 +347,9 @@ class BlastWorkflow():
             sys.exit()
 
         # extract homologs
-        self.logger.info('Extracting homologs.')
+        self.logger.info('Extracting homologs and determining local gene context.')
         db_homologs_tmp = os.path.join(output_dir, 'homologs_db.tmp')
-        self.extract_homologs(homologs.keys(), db_file, db_homologs_tmp)
+        gene_precontext, gene_postcontext = self.extract_homologs_and_context(homologs.keys(), db_file, db_homologs_tmp)
         homolog_ouput = os.path.join(output_dir, 'homologs.faa')
         concatenate_files([query_proteins, db_homologs_tmp], homolog_ouput)
         os.remove(db_homologs_tmp)
@@ -291,6 +397,12 @@ class BlastWorkflow():
         tree_output_log = os.path.join(output_dir, 'fasttree.log')
         fasttree.run(trimmed_msa_output, 'prot', 'wag', tree_output, tree_log, tree_output_log)
 
+        # root tree at midpoint
+        self.logger.info('Rooting tree at midpoint.')
+        tree = dendropy.Tree.get_from_path(tree_output, schema='newick', as_rooted=False, preserve_underscores=True)
+        tree.reroot_at_midpoint()
+        tree.write_to_path(tree_output, schema='newick', suppress_rooting=True, unquoted_underscores=True)
+
         # create tax2tree consensus map and decorate tree
         self.logger.info('Decorating internal tree nodes with tax2tree.')
         output_taxonomy_file = os.path.join(output_dir, 'taxonomy.tsv')
@@ -303,7 +415,29 @@ class BlastWorkflow():
         t2t_tree = os.path.join(output_dir, 'homologs.tax2tree.tree')
         os.system('t2t decorate -m %s -t %s -o %s' % (output_taxonomy_file, tree_output, t2t_tree))
 
+        # setup metadata for ARB file
+        src_dir = os.path.dirname(os.path.realpath(__file__))
+        version_file = open(os.path.join(src_dir, 'VERSION'))
+
+        metadata = {}
+        metadata['mingle_version'] = version_file.read().strip()
+        metadata['mingle_query_proteins'] = query_proteins
+        metadata['mingle_db_file'] = db_file
+        metadata['mingle_taxonomy_file'] = taxonomy_file
+        metadata['mingle_blast_evalue'] = str(evalue)
+        metadata['mingle_blast_per_identity'] = str(per_identity)
+        metadata['mingle_blast_per_aln_len'] = str(per_aln_len)
+        metadata['mingle_blast_max_matches'] = str(max_matches)
+        metadata['mingle_blast_mode'] = blast_mode
+
+        metadata['mingle_msa_min_per_taxa'] = str(min_per_taxa)
+        metadata['mingle_msa_min_per_bp'] = str(min_per_bp)
+        metadata['mingle_msa_program'] = msa_program
+
         # create ARB metadata file
         self.logger.info('Creating ARB metadata file.')
         arb_metadata_file = os.path.join(output_dir, 'arb.metadata.txt')
-        self.create_arb_metadata(homologs, trimmed_msa_output, taxonomy, arb_metadata_file)
+        self.create_arb_metadata(homologs, trimmed_msa_output, taxonomy,
+                                 metadata,
+                                 gene_precontext, gene_postcontext,
+                                 arb_metadata_file)
