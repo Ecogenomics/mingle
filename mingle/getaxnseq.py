@@ -53,8 +53,7 @@ class Tax_n_Seq_builder:
             split = entry.rstrip().split('; ')
             
             # split out the taxon ID from the first split of above
-            taxon_id = split[0].split()[0]
-            first_taxon = split[0].split()[1]
+            taxon_id, first_taxon = split[0].split()[:2]
             tax_split = [first_taxon] + split[1:]
             
             # Replace spaces with underscores e.g. 'Candidatus my_genus'
@@ -121,10 +120,9 @@ class Tax_n_Seq_builder:
             seqout.write('seqname,tax_id\n')
             # write each taxonomic association
             for array in first_pass_id_and_taxonomies:
-                if len(array) == 8:
-                    seqout.write("%s,%s\n" % (array[0], array[-2]))
-                else:
-                    seqout.write("%s,%s\n" % (array[0], array[-1]))
+                index = -1
+                if len(array) == 8: index = -2
+                seqout.write("%s,%s\n" % (array[0], array[index]))
 
 
         # Write the taxonomy file
