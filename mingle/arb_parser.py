@@ -154,10 +154,10 @@ class ArbParser:
         """
         is_first = True
         for dahash in hashes:
-            if is_first:
-                is_first = False
-            else:
+            if not is_first:
                 io.write('\n')
+            else:
+                is_first = False
 
             io.write('BEGIN\n')
             for key in sorted(dahash.keys()):
