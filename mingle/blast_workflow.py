@@ -26,7 +26,6 @@ __status__ = "Development"
 import os
 import sys
 import logging
-from collections import deque
 
 import biolib.seq_io as seq_io
 import biolib.seq_tk as seq_tk
@@ -90,12 +89,16 @@ class BlastWorkflow():
             d[seq_id] -> list of annotations for post-context genes
         """
 
+        gene_precontext = {}
+        gene_postcontext = {}
+
+        if len(homologs) == 0:
+            return gene_precontext, gene_postcontext
+
         if type(homologs) is not set:
             homologs = set(homologs)
 
         fout = open(output_file, 'w')
-        gene_precontext = {}
-        gene_postcontext = {}
         local_context = [('unknown_x~unknown', None)] * 3
         post_context_counter = {}
         for seq_id, seq, annotation in seq_io.read_fasta_seq(db_file, keep_annotation=True):
@@ -261,7 +264,8 @@ class BlastWorkflow():
         fout.close()
 
     def run(self, query_proteins,
-            db_file, taxonomy_file,
+            db_file, custom_db_file,
+            taxonomy_file, custom_taxonomy_file,
             evalue, per_identity, per_aln_len, max_matches, blast_mode,
             min_per_taxa, min_per_bp, restrict_taxon,
             msa_program,
@@ -278,8 +282,12 @@ class BlastWorkflow():
             Fasta file containing query proteins.
         db_file : str
             BLAST database of reference proteins.
+        custom_db_file : str
+            Custom database of proteins.
         taxonomy_file : str
             Taxonomic assignment of each reference genomes.
+        custom_taxonomy_file : str
+            Taxonomic assignment of genomes in custom database.
         evalue : float
             E-value threshold used to define homolog.
         per_identity : float
@@ -322,13 +330,24 @@ class BlastWorkflow():
         self.logger.info('Reading taxonomy file.')
         taxonomy = Taxonomy().read(taxonomy_file)
 
+        if custom_taxonomy_file:
+            custom_taxonomy = Taxonomy().read(custom_taxonomy_file)
+            taxonomy.update(custom_taxonomy)
+
         # identify homologs using BLASTP
         self.logger.info('Identifying homologs using %s.' % blast_mode)
         blast = Blast(self.cpus)
-        blast_output = os.path.join(output_dir, 'blastp.hits.tsv')
+        blast_output = os.path.join(output_dir, 'blastp.reference_hits.tsv')
         blast.blastp(query_proteins, db_file, blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
         homologs = blast.identify_homologs(blast_output, evalue, per_identity, per_aln_len, output_fmt='custom')
-        self.logger.info('Identified %d homologs.' % len(homologs))
+        self.logger.info('Identified %d homologs in reference database.' % len(homologs))
+
+        custom_homologs = None
+        if custom_db_file:
+            custom_blast_output = os.path.join(output_dir, 'blastp.custom_hits.tsv')
+            blast.blastp(query_proteins, custom_db_file, custom_blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
+            custom_homologs = blast.identify_homologs(custom_blast_output, evalue, per_identity, per_aln_len, output_fmt='custom')
+            self.logger.info('Identified %d homologs in custom database.' % len(custom_homologs))
 
         # restrict homologs to specific taxonomic group
         if restrict_taxon:
@@ -350,8 +369,19 @@ class BlastWorkflow():
         self.logger.info('Extracting homologs and determining local gene context.')
         db_homologs_tmp = os.path.join(output_dir, 'homologs_db.tmp')
         gene_precontext, gene_postcontext = self.extract_homologs_and_context(homologs.keys(), db_file, db_homologs_tmp)
+
         homolog_ouput = os.path.join(output_dir, 'homologs.faa')
-        concatenate_files([query_proteins, db_homologs_tmp], homolog_ouput)
+        if custom_homologs:
+            custom_db_homologs_tmp = os.path.join(output_dir, 'custom_homologs_db.tmp')
+            custom_gene_precontext, custom_gene_postcontext = self.extract_homologs_and_context(custom_homologs.keys(), custom_db_file, custom_db_homologs_tmp)
+            gene_precontext.update(custom_gene_precontext)
+            gene_postcontext.update(custom_gene_postcontext)
+            homologs.update(custom_homologs)
+            concatenate_files([query_proteins, db_homologs_tmp, custom_db_homologs_tmp], homolog_ouput)
+            os.remove(custom_db_homologs_tmp)
+        else:
+            concatenate_files([query_proteins, db_homologs_tmp], homolog_ouput)
+
         os.remove(db_homologs_tmp)
 
         # infer multiple sequence alignment
@@ -371,9 +401,12 @@ class BlastWorkflow():
         # trim multiple sequence alignment
         self.logger.info('Trimming poorly represented columns from alignment.')
         seqs = seq_io.read_fasta(msa_output, keep_annotation=True)
+
+        for seq_id, seq in seqs.iteritems():
+            if '>' in seq or '(' in seq:
+                print seq_id
+
         trimmed_seqs, pruned_seqs = seq_tk.trim_seqs(seqs, min_per_taxa / 100.0, min_per_bp / 100.0)
-        trimmed_msa_output = os.path.join(output_dir, 'homologs.trimmed.aligned.faa')
-        seq_io.write_fasta(trimmed_seqs, trimmed_msa_output)
         self.logger.info('%d of %d taxa were deemed to be too short and removed.' % (len(pruned_seqs), len(seqs)))
 
         if len(pruned_seqs) > 0:
@@ -384,6 +417,9 @@ class BlastWorkflow():
         if len(pruned_seqs) == len(seqs):
             self.logger.error('Too many sequences were pruned. Gene tree cannot be inferred.')
             sys.exit()
+
+        trimmed_msa_output = os.path.join(output_dir, 'homologs.trimmed.aligned.faa')
+        seq_io.write_fasta(trimmed_seqs, trimmed_msa_output)
 
         self.logger.info('Trimming alignment from %d bp to %d bp.' % (len(seqs.values()[0]), len(trimmed_seqs.values()[0])))
         os.remove(msa_output)
@@ -399,7 +435,7 @@ class BlastWorkflow():
 
         # root tree at midpoint
         self.logger.info('Rooting tree at midpoint.')
-        tree = dendropy.Tree.get_from_path(tree_output, schema='newick', as_rooted=False, preserve_underscores=True)
+        tree = dendropy.Tree.get_from_path(tree_output, schema='newick', rooting="force-unrooted", preserve_underscores=True)
         tree.reroot_at_midpoint()
         tree.write_to_path(tree_output, schema='newick', suppress_rooting=True, unquoted_underscores=True)
 
@@ -409,7 +445,9 @@ class BlastWorkflow():
         fout = open(output_taxonomy_file, 'w')
         for homolog_id in homologs.keys():
             genome_id = homolog_id[homolog_id.find('~') + 1:].split()[0]
-            fout.write(homolog_id + '\t' + ';'.join(taxonomy[genome_id]) + '\n')
+            t = taxonomy.get(genome_id, None)
+            if t:
+                fout.write(homolog_id + '\t' + ';'.join(t) + '\n')
         fout.close()
 
         t2t_tree = os.path.join(output_dir, 'homologs.tax2tree.tree')

@@ -22,5 +22,7 @@ setup(
     long_description=open('README.md').read(),
     install_requires=[
         "biopython >= 1.63",
-        "graftm >= 0.0.1"],
+        "graftm >= 0.0.1",
+        "biolib >= 0.0.7",
+        "dendropy >= 4.0.0"],
 )

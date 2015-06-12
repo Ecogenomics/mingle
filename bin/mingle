@@ -38,6 +38,8 @@ from mingle.graftm_stockholm_io import GraftMStockholmIterator
 from mingle.arb_parser import ArbParser
 from mingle.reduce_workflow import Reduce
 from mingle.bootstrap import Bootstrap
+from mingle.prokka import Prokka
+from mingle.create_database import CreateDatabase
 
 
 def version():
@@ -59,6 +61,10 @@ def printHelp():
   Tree utilities:
     reduce     -> Infer tree for reduced set of genes
     bootstrap  -> Calculate bootstrap support for tree
+
+  Database utilities:
+    run_prokka -> Run Prokka across multiple genome bins
+    create_db  -> Create mingle-compatible database
     '''
 
 
@@ -381,7 +387,9 @@ def blast_workflow(options):
     blast_workflow = BlastWorkflow(options.cpus)
     blast_workflow.run(options.query_proteins,
                        options.db_file,
+                       options.custom_db_file,
                        options.taxonomy_file,
+                       options.custom_taxonomy_file,
                        options.evalue,
                        options.per_identity,
                        options.per_aln_len,
@@ -437,10 +445,13 @@ if __name__ == '__main__':
     req_args.add_argument('-o', '--output_dir', help='output directory', required=True)
 
     optonal_args = blast_parser.add_argument_group('optional arguments')
+    optonal_args.add_argument('--custom_db_file', help='BLAST database of additional proteins', default=None)
+    optonal_args.add_argument('--custom_taxonomy_file', help='taxonomic assignment of each genomes in custom database', default=None)
     optonal_args.add_argument('-e', '--evalue', help='evalue cutoff for identifying homologs', type=float, default=1e-5)
     optonal_args.add_argument('-p', '--per_identity', help="percent amino acid identity for identifying homologs", type=float, default=30.0)
     optonal_args.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs", type=float, default=50.0)
     optonal_args.add_argument('-m', '--max_matches', help="maximum number of matches per query protein", type=int, default=500)
+
     optonal_args.add_argument('--blast_mode', choices=['blastp', 'blastp-fast'], help="type of BLASTP to perform", default='blastp-fast')
     optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required required to retain column', type=float, default=50.0)
     optonal_args.add_argument('--min_per_bp', help='minimum percentage of base pairs required to keep trimmed seqs', type=float, default=50.0)
@@ -481,6 +492,46 @@ if __name__ == '__main__':
     optonal_args.add_argument('--cpus', type=int, help='CPUs to use throughout the process', default=1)
     optonal_args.add_argument('-h', '--help', action="help", help="show help message")
 
+    # run prokka across multiple bins
+    run_prokka_parser = subparsers.add_parser('run_prokka',
+                                        add_help=False,
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Run Prokka across multiple genome bins.')
+
+    req_args = run_prokka_parser.add_argument_group('required arguments')
+    req_args.add_argument('genome_dir', help="directory containing genome bins")
+    req_args.add_argument('output_dir', help='directory to store results')
+
+    optonal_args = run_prokka_parser.add_argument_group('optional arguments')
+    optonal_args.add_argument('-x', '--extension', default='fna', help="extension of files with called genes (other files in directory are ignored)")
+    optonal_args.add_argument('--kingdom', help='kingdom to use for gene annotation', choices=['Archaea', 'Bacteria'], default='Bacteria')
+    optonal_args.add_argument('--cpus', type=int, default=1, help='number of cpus to use')
+    optonal_args.add_argument('-h', '--help', action="help", help="show help message")
+
+    # create database that is compatible with mingle
+    create_db_parser = subparsers.add_parser('create_db',
+                                        add_help=False,
+                                        formatter_class=CustomHelpFormatter,
+                                        description='Create mingle-compatible database.')
+
+    req_args = create_db_parser.add_argument_group('required arguments')
+    req_args.add_argument('genome_prot_dir', help="directory containing  amino acid genes for each genome")
+    req_args.add_argument('output_dir', help='directory to store results')
+
+    optonal_args = create_db_parser.add_argument_group('optional arguments')
+    optonal_args.add_argument('-m', '--max_taxa', type=int, default=50, help='maximum taxa to retain in a named group')
+    optonal_args.add_argument('-r', '--rank', type=int, default=5, help='rank to preform dereplication [0=domain, 6=species]')
+    optonal_args.add_argument('-p', '--per_identity', type=float, default=90.0, help="percent identity for subsampling similar genes")
+    optonal_args.add_argument('-a', '--per_aln_len', type=float, default=90.0, help="percent alignment length for subsampling similar genes")
+    optonal_args.add_argument('-x', '--extension', default='faa', help="extension of files with called genes (other files in directory are ignored)")
+    optonal_args.add_argument('--taxonomy', default=None, help='taxonomy string for each genome')
+    optonal_args.add_argument('--type_strains', default=None, help='file specifying type strains that should not be filtered')
+    optonal_args.add_argument('--genomes_to_process', default=None, help='list of genomes to retain instead of performing taxon subsampling')
+    optonal_args.add_argument('--keep_all_genes', action="store_true", default=False, help='restricts filtering to taxa')
+    optonal_args.add_argument('--no_reformat_gene_ids', action="store_true", default=False, help='do not reformat gene identifies')
+    optonal_args.add_argument('--cpus', type=int, default=1, help='number of cpus to use')
+    optonal_args.add_argument('-h', '--help', action="help", help="show help message")
+
     # get and check options
     options = None
     if(len(sys.argv) == 1 or sys.argv[1] == '-h' or sys.argv == '--help'):
@@ -508,6 +559,25 @@ if __name__ == '__main__':
     elif options.subparser_name == 'bootstrap':
         bootstrap = Bootstrap(options.cpus)
         bootstrap.run(options.tree, options.msa_file, options.output_tree, options.num_replicates)
+        sys.exit(0)
+    elif options.subparser_name == 'run_prokka':
+        run_prokka = Prokka(options.cpus)
+        run_prokka.run(options.genome_dir, options.kingdom, options.extension, options.output_dir)
+        sys.exit(0)
+    elif options.subparser_name == 'create_db':
+        create_db = CreateDatabase(options.cpus)
+        create_db.run(options.taxonomy,
+                         options.type_strains,
+                         options.genome_prot_dir,
+                         options.extension,
+                         options.max_taxa,
+                         options.rank,
+                         options.per_identity,
+                         options.per_aln_len,
+                         options.genomes_to_process,
+                         options.keep_all_genes,
+                         options.no_reformat_gene_ids,
+                         options.output_dir)
         sys.exit(0)
 
     # create output directory
