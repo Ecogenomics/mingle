@@ -428,15 +428,16 @@ class BlastWorkflow():
         self.logger.info('Inferring gene tree.')
         fasttree = FastTree(multithreaded=(self.cpus > 1))
 
-        tree_output = os.path.join(output_dir, 'homologs.tree')
+        tree_unrooted_output = os.path.join(output_dir, 'homologs.unrooted.tree')
         tree_log = os.path.join(output_dir, 'homologs.tree.log')
         tree_output_log = os.path.join(output_dir, 'fasttree.log')
-        fasttree.run(trimmed_msa_output, 'prot', 'wag', tree_output, tree_log, tree_output_log)
+        fasttree.run(trimmed_msa_output, 'prot', 'wag', tree_unrooted_output, tree_log, tree_output_log)
 
         # root tree at midpoint
         self.logger.info('Rooting tree at midpoint.')
-        tree = dendropy.Tree.get_from_path(tree_output, schema='newick', rooting="force-unrooted", preserve_underscores=True)
+        tree = dendropy.Tree.get_from_path(tree_unrooted_output, schema='newick', rooting="force-unrooted", preserve_underscores=True)
         tree.reroot_at_midpoint()
+        tree_output = os.path.join(output_dir, 'homologs.unrooted.tree')
         tree.write_to_path(tree_output, schema='newick', suppress_rooting=True, unquoted_underscores=True)
 
         # create tax2tree consensus map and decorate tree
