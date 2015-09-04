@@ -128,7 +128,7 @@ class Reduce():
 
         # root tree at midpoint
         self.logger.info('Rooting tree at midpoint.')
-        tree = dendropy.Tree.get_from_path(output_tree, schema='newick', rooting="force-unrooted", preserve_underscores=True)
+        tree = dendropy.Tree.get_from_path(output_tree, schema='newick', rooting="force-rooted", preserve_underscores=True)
         tree.reroot_at_midpoint()
         tree.write_to_path(output_tree, schema='newick', suppress_rooting=True, unquoted_underscores=True)
 

@@ -213,7 +213,7 @@ class BlastWorkflow():
             arb_metadata['img_genome_id'] = genome_id
             arb_metadata['img_scaffold_id'] = scaffold_gene_id[0:scaffold_gene_id.rfind('_')]
             arb_metadata['img_scaffold_gene_id'] = scaffold_gene_id
-            arb_metadata['img_tax_string'] = ';'.join(taxonomy.get(genome_id, ''))
+            arb_metadata['gtdb_tax_string'] = ';'.join(taxonomy.get(genome_id, ''))
             arb_metadata['aligned_seq'] = seq
 
             for k, v in metadata.iteritems():
@@ -328,7 +328,13 @@ class BlastWorkflow():
 
         # read taxonomy file
         self.logger.info('Reading taxonomy file.')
-        taxonomy = Taxonomy().read(taxonomy_file)
+        taxonomy_tmp = Taxonomy().read(taxonomy_file)
+
+        # *** [HACK] Fix genome ids to allow use of GTDBlite taxonomy files
+        taxonomy = {}
+        for genome_id, t in taxonomy_tmp.iteritems():
+            genome_id = genome_id.replace('IMG_', '')
+            taxonomy[genome_id] = t
 
         if custom_taxonomy_file:
             custom_taxonomy = Taxonomy().read(custom_taxonomy_file)
@@ -435,8 +441,9 @@ class BlastWorkflow():
 
         # root tree at midpoint
         self.logger.info('Rooting tree at midpoint.')
-        tree = dendropy.Tree.get_from_path(tree_unrooted_output, schema='newick', rooting="force-unrooted", preserve_underscores=True)
-        tree.reroot_at_midpoint()
+        tree = dendropy.Tree.get_from_path(tree_unrooted_output, schema='newick', rooting="force-rooted", preserve_underscores=True)
+        if len(trimmed_seqs) > 2:
+            tree.reroot_at_midpoint()
         tree_output = os.path.join(output_dir, 'homologs.unrooted.tree')
         tree.write_to_path(tree_output, schema='newick', suppress_rooting=True, unquoted_underscores=True)
 
