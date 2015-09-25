@@ -262,6 +262,22 @@ class BlastWorkflow():
         arb_parser = ArbParser()
         arb_parser.write(arb_metadata_list, fout)
         fout.close()
+        
+    def _validate_seq_ids(self, query_proteins):
+        """Ensure all sequeces identifiers contain only acceptable characters.
+
+        Parameters
+        ----------
+        query_proteins : str
+            Fasta file containing query proteins.
+        """
+        
+        invalid_chars = set('()[],;~')
+        for seq_id, _seq in seq_io.read_seq(query_proteins):
+            if any((c in invalid_chars) for c in seq_id):
+                self.logger.error('Sequence contains an invalid character: %s' % seq_id)
+                self.logger.error('Sequence identifiers must not contain the following characters: ' + ''.join(invalid_chars))
+                sys.exit()
 
     def run(self, query_proteins,
             db_file, custom_db_file,
@@ -325,6 +341,9 @@ class BlastWorkflow():
         if not os.path.exists(db_file):
             self.logger.error('Missing database file: %s' % db_file)
             sys.exit()
+            
+        # validate query sequence names for use with mingle
+        self._validate_seq_ids(query_proteins)
 
         # read taxonomy file
         self.logger.info('Reading taxonomy file.')
