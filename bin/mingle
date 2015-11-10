@@ -515,7 +515,7 @@ if __name__ == '__main__':
                                         description='Create mingle-compatible database.')
 
     req_args = create_db_parser.add_argument_group('required arguments')
-    req_args.add_argument('genome_prot_dir', help="directory containing  amino acid genes for each genome")
+    req_args.add_argument('genome_prot_dir', help="directory containing amino acid genes for each genome")
     req_args.add_argument('output_dir', help='directory to store results')
 
     optonal_args = create_db_parser.add_argument_group('optional arguments')

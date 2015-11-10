@@ -30,7 +30,6 @@ __email__ = 'donovan.parks@gmail.com'
 __status__ = 'Development'
 
 import os
-import datetime
 import string
 import random
 import tempfile
@@ -42,6 +41,8 @@ from biolib.common import make_sure_path_exists, remove_extension
 from biolib.taxonomy import Taxonomy
 from biolib.external.execute import check_dependencies
 from biolib.misc.time_keeper import TimeKeeper
+
+from mingle.common import validate_seq_ids
 
 
 class CreateDatabase(object):
@@ -257,7 +258,6 @@ class CreateDatabase(object):
         # write out gene file with modified identifiers
         fout = open(output_file, 'w')
         for gene_id, seq, annotation in seq_io.read_fasta_seq(gene_file, keep_annotation=True):
-
             annotation = annotation[annotation.find(' ') + 1:]  # remove additional gene id from annotation
             annotation += ' [gene id: ' + gene_id + ']'  # append original gene id for future reference
 
@@ -469,6 +469,9 @@ class CreateDatabase(object):
                 rank_genomes[self.underclassified].append(genome_id)
             else:
                 rank_genomes[taxa].append(genome_id)
+
+            validate_seq_ids(genome_file)
+
         fout.close()
 
         total_genomes_to_process = sum([len(genome_list) for genome_list in rank_genomes.values()])
