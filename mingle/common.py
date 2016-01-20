@@ -39,7 +39,7 @@ def validate_seq_ids(query_proteins):
         Fasta file containing query proteins.
     """
 
-    invalid_chars = set('()[],;')
+    invalid_chars = set('()[],;=')
     for seq_id, _seq in seq_io.read_seq(query_proteins):
         if any((c in invalid_chars) for c in seq_id):
             logging.getLogger().error('Invalid sequence header in file %s' % query_proteins)

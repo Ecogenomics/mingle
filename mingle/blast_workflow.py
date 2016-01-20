@@ -264,8 +264,6 @@ class BlastWorkflow():
         arb_parser.write(arb_metadata_list, fout)
         fout.close()
 
-
-
     def run(self, query_proteins,
             db_file, custom_db_file,
             taxonomy_file, custom_taxonomy_file,
@@ -351,14 +349,14 @@ class BlastWorkflow():
         blast = Blast(self.cpus)
         blast_output = os.path.join(output_dir, 'blastp.reference_hits.tsv')
         blast.blastp(query_proteins, db_file, blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
-        homologs = blast.identify_homologs(blast_output, evalue, per_identity, per_aln_len, output_fmt='custom')
+        homologs = blast.identify_homologs(blast_output, evalue, per_identity, per_aln_len)
         self.logger.info('Identified %d homologs in reference database.' % len(homologs))
 
         custom_homologs = None
         if custom_db_file:
             custom_blast_output = os.path.join(output_dir, 'blastp.custom_hits.tsv')
             blast.blastp(query_proteins, custom_db_file, custom_blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
-            custom_homologs = blast.identify_homologs(custom_blast_output, evalue, per_identity, per_aln_len, output_fmt='custom')
+            custom_homologs = blast.identify_homologs(custom_blast_output, evalue, per_identity, per_aln_len)
             self.logger.info('Identified %d homologs in custom database.' % len(custom_homologs))
 
         # restrict homologs to specific taxonomic group
@@ -434,7 +432,6 @@ class BlastWorkflow():
         seq_io.write_fasta(trimmed_seqs, trimmed_msa_output)
 
         self.logger.info('Trimming alignment from %d bp to %d bp.' % (len(seqs.values()[0]), len(trimmed_seqs.values()[0])))
-        os.remove(msa_output)
 
         # infer tree
         self.logger.info('Inferring gene tree.')
@@ -449,8 +446,8 @@ class BlastWorkflow():
         self.logger.info('Rooting tree at midpoint.')
         tree = dendropy.Tree.get_from_path(tree_unrooted_output, schema='newick', rooting="force-rooted", preserve_underscores=True)
         if len(trimmed_seqs) > 2:
-            tree.reroot_at_midpoint()
-        tree_output = os.path.join(output_dir, 'homologs.unrooted.tree')
+            tree.reroot_at_midpoint(update_bipartitions=False)
+        tree_output = os.path.join(output_dir, 'homologs.rooted.tree')
         tree.write_to_path(tree_output, schema='newick', suppress_rooting=True, unquoted_underscores=True)
 
         # create tax2tree consensus map and decorate tree
