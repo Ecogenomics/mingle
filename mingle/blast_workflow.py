@@ -57,7 +57,7 @@ class BlastWorkflow():
 
         check_dependencies(['muscle', 'FastTreeMP', 'blastp', 't2t'])
 
-        self.logger = logging.getLogger()
+        self.logger = logging.getLogger('timestamp')
 
         self.cpus = cpus
 
@@ -211,9 +211,9 @@ class BlastWorkflow():
 
             arb_metadata = {}
             arb_metadata['db_name'] = seq_id
-            arb_metadata['img_genome_id'] = genome_id
-            arb_metadata['img_scaffold_id'] = scaffold_gene_id[0:scaffold_gene_id.rfind('_')]
-            arb_metadata['img_scaffold_gene_id'] = scaffold_gene_id
+            arb_metadata['genome_id'] = genome_id
+            arb_metadata['scaffold_id'] = scaffold_gene_id[0:scaffold_gene_id.rfind('_')]
+            arb_metadata['scaffold_gene_id'] = scaffold_gene_id
             arb_metadata['gtdb_tax_string'] = ';'.join(taxonomy.get(genome_id, ''))
             arb_metadata['aligned_seq'] = seq
 
@@ -235,27 +235,25 @@ class BlastWorkflow():
             if annotation:
                 annotation_split = annotation.split('[')
                 if len(annotation_split) == 3:
-                    # assume format is <annotation> [<genome name>] [<IMG gene id>]
-                    gene_annotation, organism_name, gene_id = annotation_split
+                    # assume format is <annotation> [<NCBI organism name>] [<IMG gene id>]
+                    gene_annotation, organism_name, img_gene_id = annotation_split
                     organism_name = organism_name.replace(']', '')
-                    gene_id = gene_id.replace(']', '').replace('IMG Gene ID: ', '')
+                    gene_id = img_gene_id.replace(']', '').replace('IMG Gene ID: ', '')
                 elif len(annotation_split) == 2:
-                    # format is essentially unknown, but the most likely issue
-                    # is that the gene itself just doesn't have an annotation
-                    gene_annotation = ''
-                    organism_name, gene_id = annotation_split
+                    # assume format is <annotation> [<NCBI organism name>]
+                    img_gene_id = ''
+                    gene_annotation, organism_name = annotation_split
                     organism_name = organism_name.replace(']', '')
-                    gene_id = gene_id.replace(']', '').replace('IMG Gene ID: ', '')
                 else:
                     # no idea what the format is, so just save the annotation
                     gene_annotation = annotation
                     organism_name = ''
-                    gene_id = ''
+                    img_gene_id = ''
 
-                arb_metadata['img_gene_annotation'] = gene_annotation
+                arb_metadata['gene_annotation'] = gene_annotation
                 arb_metadata['organism'] = organism_name
                 arb_metadata['full_name'] = organism_name
-                arb_metadata['img_gene_id'] = gene_id
+                arb_metadata['img_gene_id'] = img_gene_id
 
             arb_metadata_list.append(arb_metadata)
 

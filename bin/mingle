@@ -41,11 +41,13 @@ from mingle.bootstrap import Bootstrap
 from mingle.prokka import Prokka
 from mingle.create_database import CreateDatabase
 
+from biolib.logger import logger_setup
+
 
 def version():
     """Read program version from file."""
-    bin_dir = os.path.dirname(os.path.realpath(__file__))
-    version_file = open(os.path.join(bin_dir, '..', 'mingle', 'VERSION'))
+    import mingle
+    version_file = open(os.path.join(mingle.__path__[0], 'VERSION'))
     return version_file.read().strip()
 
 
@@ -540,17 +542,10 @@ if __name__ == '__main__':
     else:
         options = parser.parse_args()
 
-    # setup general properties of logger
-    logger = logging.getLogger('')
-    logger.setLevel(logging.DEBUG)
-    log_format = logging.Formatter(fmt="[%(asctime)s] %(levelname)s: %(message)s",
-                                  datefmt="%Y-%m-%d %H:%M:%S")
-
-    # setup logging to console
-    stream_logger = logging.StreamHandler(sys.stdout)
-    stream_logger.setFormatter(log_format)
-    stream_logger.setLevel(logging.DEBUG)
-    logger.addHandler(stream_logger)
+    try:
+        logger_setup(options.output_dir, "mingle.log", "Mingle", version(), False)
+    except:
+        logger_setup(options.output_dir, "mingle.log", "Mingle", version(), False)
 
     if options.subparser_name == 'reduce':
         r = Reduce(options.cpus)
@@ -579,18 +574,6 @@ if __name__ == '__main__':
                          options.no_reformat_gene_ids,
                          options.output_dir)
         sys.exit(0)
-
-    # create output directory
-    if not os.path.exists(options.output_dir):
-        os.mkdir(options.output_dir)
-
-    # set file logging
-    file_logger = logging.FileHandler(os.path.join(options.output_dir, 'mingle.log'), 'w')
-    file_logger.setFormatter(log_format)
-    logger.addHandler(file_logger)
-
-    logger.info('Running mingle v%s' % version())
-    logger.info(' '.join(sys.argv))
 
     if options.subparser_name == "hmm":
         hmm_workflow(options)
