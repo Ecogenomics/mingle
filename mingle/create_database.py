@@ -34,6 +34,7 @@ import string
 import random
 import tempfile
 import shutil
+import logging
 from collections import defaultdict
 
 import biolib.seq_io as seq_io
@@ -82,6 +83,8 @@ class CreateDatabase(object):
         self.rank_labels = Taxonomy.rank_labels
 
         self.time_keeper = TimeKeeper()
+        
+        self.logger = logging.getLogger('timestamp')
 
         self.cpus = cpus
 
@@ -412,7 +415,6 @@ class CreateDatabase(object):
         """
 
         make_sure_path_exists(output_dir)
-
         print 'Dereplicating at the rank of %s.' % self.rank_labels[rank]
 
         # get taxonomy string for each genome

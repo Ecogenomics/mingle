@@ -42,7 +42,7 @@ def validate_seq_ids(query_proteins):
     invalid_chars = set('()[],;=')
     for seq_id, _seq in seq_io.read_seq(query_proteins):
         if any((c in invalid_chars) for c in seq_id):
-            logging.getLogger().error('Invalid sequence header in file %s' % query_proteins)
-            logging.getLogger().error('Sequence contains an invalid character: %s' % seq_id)
-            logging.getLogger().error('Sequence identifiers must not contain the following characters: ' + ''.join(invalid_chars))
+            logging.getLogger('no_timestamp').error('Invalid sequence header in file %s' % query_proteins)
+            logging.getLogger('no_timestamp').error('Sequence contains an invalid character: %s' % seq_id)
+            logging.getLogger('no_timestamp').error('Sequence identifiers must not contain the following characters: ' + ''.join(invalid_chars))
             sys.exit()

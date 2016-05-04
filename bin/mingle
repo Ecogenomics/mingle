@@ -66,7 +66,7 @@ def printHelp():
 
   Database utilities:
     run_prokka -> Run Prokka across multiple genome bins
-    create_db  -> Create mingle-compatible database
+    create_db  -> Create dereplicated mingle-compatible database
     '''
 
 
@@ -514,7 +514,7 @@ if __name__ == '__main__':
     create_db_parser = subparsers.add_parser('create_db',
                                         add_help=False,
                                         formatter_class=CustomHelpFormatter,
-                                        description='Create mingle-compatible database.')
+                                        description='Create dereplicated mingle-compatible database.')
 
     req_args = create_db_parser.add_argument_group('required arguments')
     req_args.add_argument('genome_prot_dir', help="directory containing amino acid genes for each genome")
@@ -541,11 +541,11 @@ if __name__ == '__main__':
         sys.exit(0)
     else:
         options = parser.parse_args()
-
-    try:
+        
+    if hasattr(options, 'output_dir'):
         logger_setup(options.output_dir, "mingle.log", "Mingle", version(), False)
-    except:
-        logger_setup(options.output_dir, "mingle.log", "Mingle", version(), False)
+    else:
+        logger_setup(None, "mingle.log", "Mingle", version(), False)
 
     if options.subparser_name == 'reduce':
         r = Reduce(options.cpus)
