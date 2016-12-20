@@ -396,7 +396,7 @@ def blast_workflow(options):
                        options.per_identity,
                        options.per_aln_len,
                        options.max_matches,
-                       options.blast_mode,
+                       options.homology_search,
                        options.min_per_taxa,
                        options.min_per_bp,
                        options.restrict_taxon,
@@ -454,8 +454,8 @@ if __name__ == '__main__':
     optonal_args.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs", type=float, default=50.0)
     optonal_args.add_argument('-m', '--max_matches', help="maximum number of matches per query protein", type=int, default=500)
 
-    optonal_args.add_argument('--blast_mode', choices=['blastp', 'blastp-fast'], help="type of BLASTP to perform", default='blastp-fast')
-    optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required required to retain column', type=float, default=50.0)
+    optonal_args.add_argument('--homology_search', choices=['blastp-fast', 'blastp', 'diamond'], help="type of homology search to perform", default='blastp-fast')
+    optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required to retain column', type=float, default=50.0)
     optonal_args.add_argument('--min_per_bp', help='minimum percentage of base pairs required to keep trimmed seqs', type=float, default=50.0)
     optonal_args.add_argument('--restrict_taxon', help='restrict alignment to specific taxonomic group (e.g., d__Archaea)', default=None)
     optonal_args.add_argument('--msa_program', choices=['mafft', 'muscle'], help="program to use for multiple sequence alignment", default='mafft')

@@ -32,6 +32,7 @@ import biolib.seq_tk as seq_tk
 from biolib.common import concatenate_files
 from biolib.taxonomy import Taxonomy
 from biolib.external.blast import Blast
+from biolib.external.diamond import Diamond
 from biolib.external.muscle import Muscle
 from biolib.external.mafft import Mafft
 from biolib.external.fasttree import FastTree
@@ -100,7 +101,7 @@ class BlastWorkflow():
             homologs = set(homologs)
 
         fout = open(output_file, 'w')
-        local_context = [('unknown_x~unknown', None)] * 3
+        local_context = [('unknown~unknown_x', None)] * 3
         post_context_counter = {}
         for seq_id, seq, annotation in seq_io.read_fasta_seq(db_file, keep_annotation=True):
             if seq_id in homologs:
@@ -141,7 +142,7 @@ class BlastWorkflow():
         """Filter gene context to contain only genes on the same scaffold.
 
         This function assumes sequence identifies have the following format:
-            <scaffold_id>_<gene number>~<genome_id> [organism name] [IMG gene id]
+            <genome_id>~<scaffold_id>_<gene_#> [gtdb_taxonomy] [NCBI organism name] [annotation]
 
         Parameters
         ----------
@@ -156,12 +157,12 @@ class BlastWorkflow():
 
         filtered_gene_context = {}
         for seq_id, context in gene_context.iteritems():
-            gene_id = seq_id.split('~')[0]
+            _genome_id, gene_id = seq_id.split('~')
             scaffold_id = gene_id[0:gene_id.rfind('_')]
 
             filtered_context = []
             for local_seq_id, annotation in context:
-                local_gene_id = local_seq_id.split('~')[0]
+                _local_genome_id, local_gene_id = local_seq_id.split('~')
                 local_scaffold_id = local_gene_id[0:local_gene_id.rfind('_')]
 
                 # strip organism name and IMG gene id
@@ -176,9 +177,12 @@ class BlastWorkflow():
         return filtered_gene_context
 
     def create_arb_metadata(self,
-                            homologs, msa_output, taxonomy,
+                            homologs, 
+                            msa_output, 
+                            taxonomy,
                             metadata,
-                            gene_precontext, gene_postcontext,
+                            gene_precontext, 
+                            gene_postcontext,
                             output_file):
         """Create metadata file suitable for import into ARB.
 
@@ -203,8 +207,7 @@ class BlastWorkflow():
         arb_metadata_list = []
         for seq_id, seq, annotation in seq_io.read_seq(msa_output, keep_annotation=True):
             if '~' in seq_id:
-                scaffold_gene_id = seq_id[:seq_id.find('~')]
-                genome_id = seq_id[seq_id.find('~') + 1:].split()[0]
+                genome_id, scaffold_gene_id = seq_id.split('~')
             else:
                 scaffold_gene_id = seq_id
                 genome_id = ''
@@ -233,27 +236,21 @@ class BlastWorkflow():
                 arb_metadata['blast_query_id'] = hit_info.query_id
 
             if annotation:
-                annotation_split = annotation.split('[')
+                annotation_split = annotation.split('] [')
                 if len(annotation_split) == 3:
-                    # assume format is <annotation> [<NCBI organism name>] [<IMG gene id>]
-                    gene_annotation, organism_name, img_gene_id = annotation_split
-                    organism_name = organism_name.replace(']', '')
-                    gene_id = img_gene_id.replace(']', '').replace('IMG Gene ID: ', '')
-                elif len(annotation_split) == 2:
-                    # assume format is <annotation> [<NCBI organism name>]
-                    img_gene_id = ''
-                    gene_annotation, organism_name = annotation_split
-                    organism_name = organism_name.replace(']', '')
+                    # assume format is [gtdb_taxonomy] [NCBI organism name] [annotation]
+                    gtdb_taxonomy, organism_name, gene_annotation = annotation_split
+                    gtdb_taxonomy = gtdb_taxonomy.replace('[', '')
+                    gene_annotation = gene_annotation.replace(']', '')
                 else:
                     # no idea what the format is, so just save the annotation
                     gene_annotation = annotation
                     organism_name = ''
-                    img_gene_id = ''
+                    gtdb_taxonomy = ''
 
                 arb_metadata['gene_annotation'] = gene_annotation
                 arb_metadata['organism'] = organism_name
                 arb_metadata['full_name'] = organism_name
-                arb_metadata['img_gene_id'] = img_gene_id
 
             arb_metadata_list.append(arb_metadata)
 
@@ -265,7 +262,7 @@ class BlastWorkflow():
     def run(self, query_proteins,
             db_file, custom_db_file,
             taxonomy_file, custom_taxonomy_file,
-            evalue, per_identity, per_aln_len, max_matches, blast_mode,
+            evalue, per_identity, per_aln_len, max_matches, homology_search,
             min_per_taxa, min_per_bp, restrict_taxon,
             msa_program,
             output_dir):
@@ -297,8 +294,8 @@ class BlastWorkflow():
             Maximum matches per query protein.
         metadata : dict[genome_id] -> metadata dictionary
             Metadata for genomes.
-        blast_mode : str
-            Type of blast to perform.
+        homology_search : str
+            Type of homology search to perform.
         min_per_taxa : float
             Minimum percentage of taxa required to retain a column.
         min_per_bp : float
@@ -330,43 +327,45 @@ class BlastWorkflow():
 
         # read taxonomy file
         self.logger.info('Reading taxonomy file.')
-        taxonomy_tmp = Taxonomy().read(taxonomy_file)
-
-        # *** [HACK] Fix genome ids to allow use of GTDBlite taxonomy files
-        taxonomy = {}
-        for genome_id, t in taxonomy_tmp.iteritems():
-            genome_id = genome_id.replace('IMG_', '')
-            taxonomy[genome_id] = t
+        taxonomy = Taxonomy().read(taxonomy_file)
 
         if custom_taxonomy_file:
             custom_taxonomy = Taxonomy().read(custom_taxonomy_file)
             taxonomy.update(custom_taxonomy)
 
         # identify homologs using BLASTP
-        self.logger.info('Identifying homologs using %s.' % blast_mode)
+        self.logger.info('Identifying homologs using %s.' % homology_search)
         blast = Blast(self.cpus)
-        blast_output = os.path.join(output_dir, 'blastp.reference_hits.tsv')
-        blast.blastp(query_proteins, db_file, blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
+        blast_output = os.path.join(output_dir, 'reference_hits.tsv')
+        if homology_search == 'diamond':
+            diamond = Diamond(self.cpus)
+            diamond.blastp(query_proteins, db_file, evalue, per_identity, per_aln_len, max_matches, blast_output, output_fmt='custom')
+        else:
+            blast.blastp(query_proteins, db_file, blast_output, evalue, max_matches, output_fmt='custom', task=homology_search)
         homologs = blast.identify_homologs(blast_output, evalue, per_identity, per_aln_len)
         self.logger.info('Identified %d homologs in reference database.' % len(homologs))
 
         custom_homologs = None
         if custom_db_file:
-            custom_blast_output = os.path.join(output_dir, 'blastp.custom_hits.tsv')
-            blast.blastp(query_proteins, custom_db_file, custom_blast_output, evalue, max_matches, output_fmt='custom', task=blast_mode)
+            custom_blast_output = os.path.join(output_dir, 'custom_hits.tsv')
+            if homology_search == 'diamond':
+                diamond = Diamond(self.cpus)
+                diamond.blastp(query_proteins, custom_db_file, evalue, per_identity, per_aln_len, max_matches, custom_blast_output, output_fmt='custom')
+            else:
+                blast.blastp(query_proteins, custom_db_file, custom_blast_output, evalue, max_matches, output_fmt='custom', task=homology_search)
             custom_homologs = blast.identify_homologs(custom_blast_output, evalue, per_identity, per_aln_len)
             self.logger.info('Identified %d homologs in custom database.' % len(custom_homologs))
-
+            
         # restrict homologs to specific taxonomic group
         if restrict_taxon:
             self.logger.info('Restricting homologs to %s.' % restrict_taxon)
             restricted_homologs = {}
             for query_id, hit in homologs.iteritems():
-                genome_id = hit.subject_id[hit.subject_id.rfind('~') + 1:]
+                genome_id = hit.subject_id.split('~')[0]
                 if restrict_taxon in taxonomy[genome_id]:
                     restricted_homologs[query_id] = hit
 
-            self.logger.info('%d of %d homologs are from the specified group.' % (len(restricted_homologs), len(homologs)))
+            self.logger.info('%d of %d homologs in reference database are from the specified group.' % (len(restricted_homologs), len(homologs)))
             homologs = restricted_homologs
 
         if len(homologs) == 0:
@@ -453,14 +452,15 @@ class BlastWorkflow():
         output_taxonomy_file = os.path.join(output_dir, 'taxonomy.tsv')
         fout = open(output_taxonomy_file, 'w')
         for homolog_id in homologs.keys():
-            genome_id = homolog_id[homolog_id.find('~') + 1:].split()[0]
+            genome_id = homolog_id.split('~')[0]
             t = taxonomy.get(genome_id, None)
             if t:
                 fout.write(homolog_id + '\t' + ';'.join(t) + '\n')
         fout.close()
 
         t2t_tree = os.path.join(output_dir, 'homologs.tax2tree.tree')
-        os.system('t2t decorate -m %s -t %s -o %s' % (output_taxonomy_file, tree_output, t2t_tree))
+        cmd = 't2t decorate -m %s -t %s -o %s' % (output_taxonomy_file, tree_output, t2t_tree)
+        os.system(cmd)
 
         # setup metadata for ARB file
         src_dir = os.path.dirname(os.path.realpath(__file__))
@@ -475,7 +475,7 @@ class BlastWorkflow():
         metadata['mingle_blast_per_identity'] = str(per_identity)
         metadata['mingle_blast_per_aln_len'] = str(per_aln_len)
         metadata['mingle_blast_max_matches'] = str(max_matches)
-        metadata['mingle_blast_mode'] = blast_mode
+        metadata['mingle_homology_search'] = homology_search
 
         metadata['mingle_msa_min_per_taxa'] = str(min_per_taxa)
         metadata['mingle_msa_min_per_bp'] = str(min_per_bp)

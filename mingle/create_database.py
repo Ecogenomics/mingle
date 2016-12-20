@@ -58,11 +58,6 @@ class CreateDatabase(object):
     phylogenetic diversity and thus helps ensures a good
     distribution of genes within the group. Care is taken
     to ensure type strains are retained during dereplication.
-
-    Note: this script is somewhat tailored to IMG as it
-    corrects a number of common issues with IMG genomes:
-      - non-ascii characters in fasta header lines
-      - hyphens at the start of some protein sequences
     """
 
     def __init__(self, cpus):
@@ -73,6 +68,8 @@ class CreateDatabase(object):
         cpus : int
             Number of cpus to use.
         """
+        
+        self.logger = logging.getLogger('timestamp')
 
         check_dependencies(['comparem', 'diamond', 'makeblastdb'])
 
@@ -81,10 +78,6 @@ class CreateDatabase(object):
         self.rank_prefixes = Taxonomy.rank_prefixes
         self.rank_index = Taxonomy.rank_index
         self.rank_labels = Taxonomy.rank_labels
-
-        self.time_keeper = TimeKeeper()
-        
-        self.logger = logging.getLogger('timestamp')
 
         self.cpus = cpus
 
@@ -204,29 +197,16 @@ class CreateDatabase(object):
                 if gene_id in genes_to_ignore:
                     continue
 
-                # IMG headers sometimes contain non-ascii characters which cause
-                # problems with BLAST and DIAMOND so there are explicitly filtered out
-                annotation = filter(lambda x: x in string.printable, annotation)
-
-                # a few IMG genomes contain protein sequences which start with a hyphen
-                if seq[0] == '-':
-                    seq = seq[1:]
-
                 gene_out.write('>' + gene_id + ' ' + annotation + '\n')
                 gene_out.write(seq + '\n')
                 genes_kept += 1
 
         return genes_kept
 
-    def reformat_gene_id_to_scaffold_id(self, gene_file, gff_file, output_file):
+    def reformat_gene_id_to_scaffold_id(self, gene_file, gff_file, taxonomy, output_file):
         """Reformat gene ids to format which explicitly gives scaffold names.
 
-        For downstream processing it is often necessary to know which scaffold
-        a gene is contained on. PROKKA and IMG uses unique identifiers for genes.
-        This function uses the general feature file (GFF) to change gene ids
-        to the following format:
-
-        <scaffold_id>_<gene #> <annotation> [gene id]
+        <genome_id>~<scaffold_id>_<gene_#> [gtdb_taxonomy] [NCBI organism name] [annotation]
 
         Parameters
         ----------
@@ -261,10 +241,11 @@ class CreateDatabase(object):
         # write out gene file with modified identifiers
         fout = open(output_file, 'w')
         for gene_id, seq, annotation in seq_io.read_fasta_seq(gene_file, keep_annotation=True):
-            annotation = annotation[annotation.find(' ') + 1:]  # remove additional gene id from annotation
-            annotation += ' [gene id: ' + gene_id + ']'  # append original gene id for future reference
-
-            fout.write('>' + gene_id_to_scaffold_id[gene_id] + ' ' + annotation + '\n')
+            genome_id = remove_extension(gene_file)
+            fout.write('>%s [%s] [%s] [%s]\n' % (gene_id_to_scaffold_id[gene_id],
+                                                    ';'.join(taxonomy.get(genome_id, 'none')),
+                                                    'none',
+                                                    annotation))
             fout.write(seq + '\n')
         fout.close()
 
@@ -272,7 +253,7 @@ class CreateDatabase(object):
         """Modify gene ids to include source genome id.
 
         The following format is used:
-          <gene_id>~<genome_id>
+          <genome_id>~<gene_id>
 
         Parameters
         ----------
@@ -292,7 +273,7 @@ class CreateDatabase(object):
             aa_file = os.path.join(output_dir, genome_id + '.faa')
             fout = open(aa_file, 'w')
             for seq_id, seq, annotation in seq_io.read_fasta_seq(gf, keep_annotation=True):
-                fout.write('>' + seq_id + '~' + genome_id + ' ' + annotation + '\n')
+                fout.write('>%s~%s %s\n' % (genome_id, seq_id, annotation))
                 if seq[-1] == '*':
                     seq = seq[0:-1]
                 fout.write(seq + '\n')
@@ -415,33 +396,30 @@ class CreateDatabase(object):
         """
 
         make_sure_path_exists(output_dir)
-        print 'Dereplicating at the rank of %s.' % self.rank_labels[rank]
+        self.logger.info('Dereplicating at the rank of %s.' % self.rank_labels[rank])
 
         # get taxonomy string for each genome
         taxonomy = {}
         if taxonomy_file:
-            print ''
-            print 'Reading taxonomy file.'
+            self.logger.info('Reading taxonomy file.')
             taxonomy = Taxonomy().read(taxonomy_file)
-            print '  There are %d genomes with taxonomy strings.' % len(taxonomy)
+            self.logger.info('There are %d genomes with taxonomy strings.' % len(taxonomy))
 
         # get type strains; genomes which should never be dereplicated
         type_strains = set()
         if type_strains_file:
-            print ''
-            print 'Reading type strain file.'
+            self.logger.info('Reading type strain file.')
             type_strains = self.read_type_strain(type_strains_file)
-            print '  There are %d type strains.' % len(type_strains)
+            self.logger.info('There are %d type strains.' % len(type_strains))
 
         # get specific list of genomes to process
         genomes_to_retain = set()
         if genomes_to_process:
-            print ''
-            print 'Reading genomes to retain.'
+            self.logger.info('Reading genomes to retain.')
             for line in open(genomes_to_process):
                 line_split = line.split()
                 genomes_to_retain.add(line_split[0])
-            print '  Retaining %d genomes.' % len(genomes_to_retain)
+            self.logger.info('Retaining %d genomes.' % len(genomes_to_retain))
 
         # identify unique genes in each named group
         fout = open(os.path.join(output_dir, 'genomes_without_called_genes.tsv'), 'w')
@@ -477,16 +455,16 @@ class CreateDatabase(object):
         fout.close()
 
         total_genomes_to_process = sum([len(genome_list) for genome_list in rank_genomes.values()])
+        if total_genomes_to_process == 0:
+            self.logger.error('No genomes found in directory: %s. Check the --extension flag used to identify genomes.' % genome_prot_dir)
+            sys.exit(-1)
 
-        print ''
-        print 'Under-classified genomes automatically placed into the database: %d' % underclassified_genomes
-        print 'Genomes with missing sequence data: %d' % genomes_with_missing_data
-        print ''
-        print 'Total named groups: %d' % len(rank_genomes)
-        print 'Total genomes to process: %d' % total_genomes_to_process
+        self.logger.info('Under-classified genomes automatically placed into the database: %d' % underclassified_genomes)
+        self.logger.info('Genomes with missing sequence data: %d' % genomes_with_missing_data)
+        self.logger.info('Total named groups: %d' % len(rank_genomes))
+        self.logger.info('Total genomes to process: %d' % total_genomes_to_process)
 
         # process each named group
-        print ''
         gene_file = os.path.join(output_dir, 'custom_db.faa')
         gene_out = open(gene_file, 'w')
 
@@ -500,11 +478,8 @@ class CreateDatabase(object):
         for taxa, genome_list in rank_genomes.iteritems():
             processed_genomes += len(genome_list)
 
-            print ''
             print '-------------------------------------------------------------------------------'
-            print ' Processing %s | Finished %d of %d (%.2f%%) genomes.' % (taxa, processed_genomes, total_genomes_to_process, processed_genomes * 100.0 / total_genomes_to_process)
-            print self.time_keeper.get_time_stamp()
-            print '-------------------------------------------------------------------------------'
+            self.logger.info('Processing %s | Finished %d of %d (%.2f%%) genomes.' % (taxa, processed_genomes, total_genomes_to_process, processed_genomes * 100.0 / total_genomes_to_process))
 
             # create directory with selected genomes
             taxon_dir = os.path.join(tmp_dir, 'taxon')
@@ -524,7 +499,7 @@ class CreateDatabase(object):
                 gff_file = os.path.join(genome_prot_dir, genome_id + '.gff')
                 output_gene_file = os.path.join(gene_dir, genome_id + '.faa')
                 if not no_reformat_gene_ids:
-                    self.reformat_gene_id_to_scaffold_id(genome_gene_file, gff_file, output_gene_file)
+                    self.reformat_gene_id_to_scaffold_id(genome_gene_file, gff_file, taxonomy, output_gene_file)
                 else:
                     os.system('cp %s %s' % (genome_gene_file, output_gene_file))
 
@@ -538,13 +513,12 @@ class CreateDatabase(object):
                 # filter genes on AAI
                 genes_to_remove = self.filter_aai(taxon_dir, gene_dir, amended_gene_dir, per_identity, per_aln_len, self.cpus)
 
-            print ''
-            print '  Writing unique genes from genomes in %s.' % taxa
+            self.logger.info('Writing unique genes from genomes in %s.' % taxa)
             genes_kept = self.write_gene_file(gene_out, amended_gene_dir, reduced_genome_list, taxonomy, genes_to_remove)
 
-            print '    Retain %d of %d taxa.' % (len(reduced_genome_list), len(genome_list))
-            print '    Genes to keep: %d' % genes_kept
-            print '    Genes removed: %d' % len(genes_to_remove)
+            self.logger.info('Retain %d of %d taxa.' % (len(reduced_genome_list), len(genome_list)))
+            self.logger.info('Genes to keep: %d' % genes_kept)
+            self.logger.info('Genes removed: %d' % len(genes_to_remove))
 
             total_genes_kept += genes_kept
             total_genes_removed += len(genes_to_remove)
@@ -554,14 +528,11 @@ class CreateDatabase(object):
         taxonomy_out.close()
         gene_out.close()
 
-        print ''
-        print 'Retain %d of %d (%.1f%%) genomes' % (total_genomes_kept, total_genomes_to_process, total_genomes_kept * 100.0 / (total_genomes_to_process))
-        print '  Total genes kept: %d' % total_genes_kept
-        print '  Total genes removed: %d (%.1f%%)' % (total_genes_removed, total_genes_removed * 100.0 / (total_genes_kept + total_genes_removed))
+        self.logger.info('Retain %d of %d (%.1f%%) genomes' % (total_genomes_kept, total_genomes_to_process, total_genomes_kept * 100.0 / (total_genomes_to_process)))
+        self.logger.info('Total genes kept: %d' % total_genes_kept)
+        self.logger.info('Total genes removed: %d (%.1f%%)' % (total_genes_removed, total_genes_removed * 100.0 / (total_genes_kept + total_genes_removed)))
 
-        print ''
-        print 'Creating BLAST database.'
+        self.logger.info('Creating BLAST database.')
         os.system('makeblastdb -dbtype prot -in %s' % gene_file)
-        print ''
 
         shutil.rmtree(tmp_dir)
