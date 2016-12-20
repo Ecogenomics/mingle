@@ -41,11 +41,13 @@ from mingle.bootstrap import Bootstrap
 from mingle.prokka import Prokka
 from mingle.create_database import CreateDatabase
 
+from biolib.logger import logger_setup
+
 
 def version():
     """Read program version from file."""
-    bin_dir = os.path.dirname(os.path.realpath(__file__))
-    version_file = open(os.path.join(bin_dir, '..', 'mingle', 'VERSION'))
+    import mingle
+    version_file = open(os.path.join(mingle.__path__[0], 'VERSION'))
     return version_file.read().strip()
 
 
@@ -64,7 +66,7 @@ def printHelp():
 
   Database utilities:
     run_prokka -> Run Prokka across multiple genome bins
-    create_db  -> Create mingle-compatible database
+    create_db  -> Create dereplicated mingle-compatible database
     '''
 
 
@@ -394,7 +396,7 @@ def blast_workflow(options):
                        options.per_identity,
                        options.per_aln_len,
                        options.max_matches,
-                       options.blast_mode,
+                       options.homology_search,
                        options.min_per_taxa,
                        options.min_per_bp,
                        options.restrict_taxon,
@@ -452,8 +454,8 @@ if __name__ == '__main__':
     optonal_args.add_argument('-a', '--per_aln_len', help="percent alignment length of query sequence for identifying homologs", type=float, default=50.0)
     optonal_args.add_argument('-m', '--max_matches', help="maximum number of matches per query protein", type=int, default=500)
 
-    optonal_args.add_argument('--blast_mode', choices=['blastp', 'blastp-fast'], help="type of BLASTP to perform", default='blastp-fast')
-    optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required required to retain column', type=float, default=50.0)
+    optonal_args.add_argument('--homology_search', choices=['blastp-fast', 'blastp', 'diamond'], help="type of homology search to perform", default='blastp-fast')
+    optonal_args.add_argument('--min_per_taxa', help='minimum percentage of taxa required to retain column', type=float, default=50.0)
     optonal_args.add_argument('--min_per_bp', help='minimum percentage of base pairs required to keep trimmed seqs', type=float, default=50.0)
     optonal_args.add_argument('--restrict_taxon', help='restrict alignment to specific taxonomic group (e.g., d__Archaea)', default=None)
     optonal_args.add_argument('--msa_program', choices=['mafft', 'muscle'], help="program to use for multiple sequence alignment", default='mafft')
@@ -512,10 +514,10 @@ if __name__ == '__main__':
     create_db_parser = subparsers.add_parser('create_db',
                                         add_help=False,
                                         formatter_class=CustomHelpFormatter,
-                                        description='Create mingle-compatible database.')
+                                        description='Create dereplicated mingle-compatible database.')
 
     req_args = create_db_parser.add_argument_group('required arguments')
-    req_args.add_argument('genome_prot_dir', help="directory containing  amino acid genes for each genome")
+    req_args.add_argument('genome_prot_dir', help="directory containing amino acid genes for each genome")
     req_args.add_argument('output_dir', help='directory to store results')
 
     optonal_args = create_db_parser.add_argument_group('optional arguments')
@@ -539,18 +541,11 @@ if __name__ == '__main__':
         sys.exit(0)
     else:
         options = parser.parse_args()
-
-    # setup general properties of logger
-    logger = logging.getLogger('')
-    logger.setLevel(logging.DEBUG)
-    log_format = logging.Formatter(fmt="[%(asctime)s] %(levelname)s: %(message)s",
-                                  datefmt="%Y-%m-%d %H:%M:%S")
-
-    # setup logging to console
-    stream_logger = logging.StreamHandler(sys.stdout)
-    stream_logger.setFormatter(log_format)
-    stream_logger.setLevel(logging.DEBUG)
-    logger.addHandler(stream_logger)
+        
+    if hasattr(options, 'output_dir'):
+        logger_setup(options.output_dir, "mingle.log", "Mingle", version(), False)
+    else:
+        logger_setup(None, "mingle.log", "Mingle", version(), False)
 
     if options.subparser_name == 'reduce':
         r = Reduce(options.cpus)
@@ -579,18 +574,6 @@ if __name__ == '__main__':
                          options.no_reformat_gene_ids,
                          options.output_dir)
         sys.exit(0)
-
-    # create output directory
-    if not os.path.exists(options.output_dir):
-        os.mkdir(options.output_dir)
-
-    # set file logging
-    file_logger = logging.FileHandler(os.path.join(options.output_dir, 'mingle.log'), 'w')
-    file_logger.setFormatter(log_format)
-    logger.addHandler(file_logger)
-
-    logger.info('Running mingle v%s' % version())
-    logger.info(' '.join(sys.argv))
 
     if options.subparser_name == "hmm":
         hmm_workflow(options)
