@@ -2,7 +2,8 @@
 
 Inference of gene trees using HMMs or BLAST homology search.
 
-[This project is in active development and not currently ready for public use.]
+This projects has been renamed to the GeneTreeTk and development has moved to:
+https://github.com/dparks1134/GeneTreeTk
 
 ## Copyright
 
